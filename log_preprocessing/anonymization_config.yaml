@@ -1,0 +1,224 @@
+# Configurazione per l'anonimizzazione dei log
+# Definisce quali campi devono essere anonimizzati per ogni formato
+
+# Configurazione globale
+global_settings:
+  # Metodo di anonimizzazione di default
+  default_method: "replace"
+  # Placeholder di default per sostituzioni
+  default_placeholder: "[REDACTED]"
+  # Abilita rilevamento automatico PII tramite Presidio
+  auto_detect_pii: true
+  # Lingua per il rilevamento PII
+  language: "en"
+  # Soglia di confidenza per Presidio (0.0-1.0)
+  confidence_threshold: 0.7
+
+# Configurazione per formato FortiGate
+fortigate:
+  # Campi sempre da anonimizzare
+  always_anonymize:
+    - field: "srcip"
+      method: "replace"
+      placeholder: "[SRC_IP]"
+    - field: "dstip" 
+      method: "replace"
+      placeholder: "[DST_IP]"
+    - field: "user"
+      method: "hash"
+      salt: "fortigate_salt"
+    - field: "devname"
+      method: "replace"
+      placeholder: "[DEVICE]"
+    - field: "hostname"
+      method: "replace" 
+      placeholder: "[HOST]"
+    - field: "mac"
+      method: "mask"
+      pattern: "xx:xx:xx:xx:**:**"
+  
+  # Campi da anonimizzare condizionalmente
+  conditional_anonymize:
+    - field: "msg"
+      condition: "contains_ip"
+      method: "presidio"
+    - field: "logdesc"
+      condition: "contains_pii"
+      method: "presidio"
+  
+  # Campi da preservare (non anonimizzare mai)
+  preserve_fields:
+    - "logver"
+    - "logid"
+    - "type"
+    - "subtype" 
+    - "level"
+    - "action"
+    - "proto"
+    - "duration"
+    - "sentbyte"
+    - "rcvdbyte"
+
+# Configurazione per formato CSV
+csv:
+  always_anonymize:
+    - field: "Computer Name"
+      method: "replace"
+      placeholder: "[COMPUTER]"
+    - field: "Account Name"
+      method: "hash"
+      salt: "csv_account_salt"
+    - field: "Account Domain"
+      method: "replace"
+      placeholder: "[DOMAIN]"
+    - field: "Remote IP"
+      method: "replace"
+      placeholder: "[REMOTE_IP]"
+    - field: "Local IP"
+      method: "replace"
+      placeholder: "[LOCAL_IP]"
+    - field: "Sha1"
+      method: "mask"
+      pattern: "****...****"
+    - field: "Sha256"
+      method: "mask"
+      pattern: "****...****"
+    - field: "MD5"
+      method: "mask"
+      pattern: "****...****"
+  
+  conditional_anonymize:
+    - field: "Process Command Line"
+      condition: "contains_path"
+      method: "presidio"
+    - field: "File Name"
+      condition: "contains_sensitive"
+      method: "presidio"
+  
+  preserve_fields:
+    - "Event Time"
+    - "Action Type"
+    - "Process Id"
+    - "Protocol"
+    - "Logon Type"
+
+# Configurazione per formato CEF
+cef:
+  always_anonymize:
+    - field: "src"
+      method: "replace"
+      placeholder: "[SRC_IP]"
+    - field: "dst"
+      method: "replace"
+      placeholder: "[DST_IP]"
+    - field: "suser"
+      method: "hash"
+      salt: "cef_user_salt"
+    - field: "duser"
+      method: "hash"
+      salt: "cef_user_salt"
+    - field: "shost"
+      method: "replace"
+      placeholder: "[SRC_HOST]"
+    - field: "dhost"
+      method: "replace"
+      placeholder: "[DST_HOST]"
+  
+  conditional_anonymize:
+    - field: "msg"
+      condition: "contains_pii"
+      method: "presidio"
+    - field: "cs1"
+      condition: "contains_sensitive"
+      method: "presidio"
+  
+  preserve_fields:
+    - "cef_version"
+    - "device_vendor"
+    - "device_product"
+    - "severity"
+    - "act"
+
+# Configurazione per formato Syslog
+syslog:
+  always_anonymize:
+    - field: "hostname"
+      method: "replace"
+      placeholder: "[HOST]"
+  
+  conditional_anonymize:
+    - field: "message"
+      condition: "contains_pii"
+      method: "presidio"
+  
+  preserve_fields:
+    - "facility"
+    - "severity"
+    - "timestamp_str"
+    - "tag"
+    - "app_name"
+
+# Metodi di anonimizzazione disponibili
+anonymization_methods:
+  replace:
+    description: "Sostituisce il valore con un placeholder"
+  
+  hash:
+    description: "Applica hash SHA256 con salt opzionale"
+    options:
+      salt: "default_salt"
+      algorithm: "sha256"
+  
+  mask:
+    description: "Maschera parti del valore mantenendo la struttura"
+    options:
+      # Pattern: * = carattere nascosto, x = carattere mostrato
+      default_pattern: "***"
+  
+  presidio:
+    description: "Usa Microsoft Presidio per rilevamento e anonimizzazione PII"
+    options:
+      entities:
+        - "PERSON"
+        - "EMAIL_ADDRESS"
+        - "PHONE_NUMBER"
+        - "IP_ADDRESS"
+        - "CREDIT_CARD"
+        - "IBAN_CODE"
+        - "US_SSN"
+        - "URL"
+      anonymizer: "replace"
+
+# Condizioni per anonimizzazione condizionale
+conditions:
+  contains_ip:
+    description: "Campo contiene indirizzi IP"
+    regex: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"
+  
+  contains_pii:
+    description: "Campo potenzialmente contiene PII (via Presidio)"
+    presidio_check: true
+  
+  contains_path:
+    description: "Campo contiene percorsi file"
+    regex: "(?:[A-Za-z]:\\\\|/)[^\\s]*"
+  
+  contains_sensitive:
+    description: "Campo contiene dati sensibili generici"
+    keywords:
+      - "password"
+      - "secret"
+      - "key"
+      - "token"
+      - "credential"
+
+# Configurazione output
+output_settings:
+  # Mantieni metadati sull'anonimizzazione
+  keep_anonymization_metadata: true
+  # Prefisso per campi con metadati
+  metadata_prefix: "_anon_"
+  # Salva mapping originale->anonimizzato (per debug, disabilitare in produzione)
+  save_mapping: false
+  # File per salvare il mapping
+  mapping_file: "anonymization_mapping.json"

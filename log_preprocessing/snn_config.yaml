@@ -236,6 +236,75 @@ csv_features:
     - "Is Marked"
     - "Data Type"
 
+# Configurazione features per formato NSL-KDD (CSV tabellare) - adattata a SNN
+nsl_kdd_features:
+  timestamp_field: "Timestamp"  # viene creato sinteticamente se assente
+  continuous_features:
+    - field: "duration"
+      normalize: true
+      encoding: "direct"
+    - field: "src_bytes"
+      normalize: true
+      encoding: "log_scale"
+    - field: "dst_bytes"
+      normalize: true
+      encoding: "log_scale"
+    - field: "count"
+      normalize: true
+      encoding: "direct"
+    - field: "srv_count"
+      normalize: true
+      encoding: "direct"
+  categorical_features:
+    - field: "protocol_type"
+      encoding: "one_hot"
+      max_categories: 5
+    - field: "service"
+      encoding: "one_hot"
+      max_categories: 20
+    - field: "flag"
+      encoding: "one_hot"
+      max_categories: 7
+  ip_features: []
+  exclude_fields: ["label", "difficulty"]
+
+# Configurazione features per formato UNSW-NB15 (CSV)
+unsw_nb15_features:
+  timestamp_field: "Timestamp"  # se mancante viene creato
+  continuous_features:
+    - field: "srcip"
+      normalize: true
+      encoding: "hash_numeric"
+      hash_size: 32
+    - field: "sport"
+      normalize: true
+      encoding: "direct"
+    - field: "dstip"
+      normalize: true
+      encoding: "hash_numeric"
+      hash_size: 32
+    - field: "dsport"
+      normalize: true
+      encoding: "direct"
+    - field: "sbytes"
+      normalize: true
+      encoding: "log_scale"
+    - field: "dbytes"
+      normalize: true
+      encoding: "log_scale"
+  categorical_features:
+    - field: "proto"
+      encoding: "one_hot"
+      max_categories: 10
+    - field: "state"
+      encoding: "one_hot"
+      max_categories: 10
+    - field: "service"
+      encoding: "one_hot"
+      max_categories: 15
+  ip_features: []
+  exclude_fields: ["label", "Label"]
+
 # Configurazione features per formato CEF - SOLO ESSENZIALI PER SNN
 cef_features:
   # Campo timestamp obbligatorio

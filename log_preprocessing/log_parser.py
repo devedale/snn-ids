@@ -7,7 +7,7 @@ Supporta: FortiGate (tlog/elog), CSV, CEF, Syslog RFC3164, Syslog RFC5424
 import re
 import csv
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -184,10 +184,14 @@ class CSVParser:
                 delimiter = sniffer.sniff(sample).delimiter
                 
                 reader = csv.DictReader(f, delimiter=delimiter)
+                base_time = datetime.now()
                 
-                for row in reader:
+                for idx, row in enumerate(reader):
                     # Rimuovi spazi bianchi dalle chiavi e valori
                     cleaned_row = {k.strip(): v.strip() for k, v in row.items() if k}
+                    # Se non esiste un campo timestamp riconosciuto, crea Timestamp sintetico ISO
+                    if not any(k in cleaned_row for k in ['Event Time', 'Timestamp', 'Date', 'DateTime', 'Time']):
+                        cleaned_row['Timestamp'] = (base_time + timedelta(seconds=idx)).isoformat()
                     results.append(cleaned_row)
         
         except Exception as e:
@@ -298,7 +302,7 @@ class UniversalLogParser:
         """
         results = []
         
-        # Gestione speciale per CSV
+        # Gestione speciale per CSV (per estensione o contenuto)
         if format_hint == LogFormat.CSV or file_path.endswith('.csv'):
             csv_data = self.csv_parser.parse_csv_file(file_path)
             for row in csv_data:
@@ -311,6 +315,25 @@ class UniversalLogParser:
                 )
                 results.append(parsed_log)
             return results
+        else:
+            # Tenta di rilevare rapidamente se è CSV leggendo le prime righe
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    sample = f.read(1024)
+                if ',' in sample and len(sample.split(',')) > 3:
+                    csv_data = self.csv_parser.parse_csv_file(file_path)
+                    for row in csv_data:
+                        parsed_log = ParsedLog(
+                            format_type=LogFormat.CSV,
+                            timestamp=self._extract_csv_timestamp(row),
+                            raw_message=str(row),
+                            parsed_fields=row,
+                            metadata={'source_file': file_path}
+                        )
+                        results.append(parsed_log)
+                    return results
+            except Exception:
+                pass
         
         # Per altri formati, parsa riga per riga
         try:

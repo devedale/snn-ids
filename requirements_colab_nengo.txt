@@ -13,4 +13,6 @@ nengo-dl==3.6.0
 pandas>=1.5.0
 scikit-learn>=1.2.0
 pyyaml>=6.0
+typing_extensions==4.12.2
+ml-dtypes==0.2.0
 

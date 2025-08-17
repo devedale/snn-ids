@@ -1,0 +1,18 @@
+# Requisiti Colab per notebook basati su Nengo/NengoDL
+# Include i requisiti base del progetto
+-r requirements.txt
+
+# Versioni compatibili con NengoDL su Colab (Python 3.11)
+numpy==1.23.5
+typing_extensions==4.8.0
+protobuf<6.0.0
+
+tensorflow==2.13.1
+keras==2.13.1
+nengo==3.2.0
+nengo-dl==3.6.0
+
+pandas>=1.5.0
+scikit-learn>=1.2.0
+pyyaml>=6.0
+

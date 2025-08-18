@@ -1,6 +1,5 @@
 # Requisiti Colab per notebook basati su Nengo/NengoDL
-# Include i requisiti base del progetto
--r requirements.txt
+# Nota: per Colab evitiamo di includere i requisiti base del progetto per non incorrere in conflitti (numpy ecc.)
 
 # Versioni compatibili con NengoDL su Colab (stack Keras 2.13.x)
 # Nota: TF 2.13.x espone keras.engine compatibile con NengoDL 3.6.0

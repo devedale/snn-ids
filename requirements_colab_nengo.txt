@@ -1,19 +1,19 @@
 # Requisiti Colab per notebook basati su Nengo/NengoDL
 # Nota: per Colab evitiamo di includere i requisiti base del progetto per non incorrere in conflitti (numpy ecc.)
 
-# Versioni compatibili con NengoDL su Colab (stack TF 2.12.x con tf-keras)
-# Nota: TF 2.12 + tf-keras 2.15 fornisce keras.engine stabile per NengoDL 3.6.0
+# Versioni compatibili con NengoDL su Colab (stack TF 2.15.x con tf-keras)
+# Nota: TF 2.15 + tf-keras 2.15 fornisce keras.engine stabile per NengoDL 3.6.0
 
-tensorflow==2.12.1
+tensorflow==2.15.0
 tf-keras==2.15.0
 nengo==3.2.0
 nengo-dl==3.6.0
 
-numpy==1.24.3
+numpy==1.26.4
 pandas>=1.5.0
 scikit-learn>=1.2.0
 pyyaml>=6.0
-# typing_extensions coerente con TF 2.12 stack  
-typing_extensions==4.5.0
+# typing_extensions coerente con TF 2.15 stack
+typing_extensions==4.8.0
 ml-dtypes==0.2.0
 

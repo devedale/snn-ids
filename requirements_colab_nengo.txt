@@ -6,7 +6,6 @@
 # Nota: TF 2.13.x espone keras.engine compatibile con NengoDL 3.6.0
 
 tensorflow==2.13.1
-tf-keras==2.13.1
 keras==2.13.1
 nengo==3.2.0
 nengo-dl==3.6.0

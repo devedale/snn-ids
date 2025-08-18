@@ -7,6 +7,7 @@
 
 tensorflow==2.15.0.post1
 tf-keras==2.15.0
+keras==2.15.0
 nengo==3.2.0
 nengo-dl==3.6.0
 

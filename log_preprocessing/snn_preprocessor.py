@@ -8,6 +8,7 @@ import yaml
 import numpy as np
 import pandas as pd
 import hashlib
+import hmac
 import json
 import logging
 from datetime import datetime, timedelta
@@ -39,6 +40,7 @@ class SNNFeatureConfig:
     order: Optional[List[str]] = None
     preserve_subnet: Optional[bool] = None
     subnet_bits: Optional[int] = None
+    preserve_port_class: Optional[bool] = None
     description: str = ""  # Aggiunto per compatibilità con config YAML
 
 
@@ -68,33 +70,204 @@ class CryptoPAN:
     def __init__(self, key: str):
         self.key = bytes.fromhex(key)
         self._cache = {}
-    
-    def anonymize_ip(self, ip_str: str) -> str:
-        """Anonimizza IP preservando la struttura della rete"""
-        if ip_str in self._cache:
-            return self._cache[ip_str]
-        
+
+    def _hmac_digest(self, tag: str) -> bytes:
+        return hmac.new(self.key, tag.encode("utf-8"), hashlib.sha256).digest()
+
+    def anonymize_ip(self, ip_str: str, subnet_bits: int = None) -> str:
+        """Anonimizza IP preservando SOLO l'appartenenza alla stessa subnet.
+
+        - Subnet anonima: derivata tramite HMAC(key, NET|subnet)
+        - Host anonimo: derivato tramite HMAC(key, HOST|ip)
+        - Non conserva alcun ottetto originale
+        """
+        # La cache deve tener conto anche del numero di bit di subnet
+        cache_key = (ip_str, subnet_bits)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         try:
             ip = ipaddress.ip_address(ip_str)
-            # Implementazione semplificata: hash con chiave + preservazione subnet
-            hash_input = self.key + str(ip).encode()
-            hash_digest = hashlib.sha256(hash_input).digest()
-            
+
             if ip.version == 4:
-                # Preserva i primi 3 ottetti, anonimizza l'ultimo
-                octets = str(ip).split('.')
-                new_last = int(hash_digest[0]) % 254 + 1  # 1-254
-                anonymized = f"{octets[0]}.{octets[1]}.{octets[2]}.{new_last}"
+                m = 24 if subnet_bits is None else max(0, min(32, int(subnet_bits)))
+                network = ipaddress.IPv4Network(f"{ip}/{m}", strict=False)
+
+                # RFC1918 networks
+                net10 = ipaddress.IPv4Network("10.0.0.0/8")
+                net172 = ipaddress.IPv4Network("172.16.0.0/12")
+                net192 = ipaddress.IPv4Network("192.168.0.0/16")
+                in_rfc1918 = (ip in net10) or (ip in net172) or (ip in net192)
+
+                net_digest = self._hmac_digest(f"NETv4|{network.network_address}/{m}")
+
+                # Costruisci prefisso di rete anonimo rispettando la classe (privata/pubblica)
+                if in_rfc1918:
+                    # Scegli blocco privato di destinazione in modo deterministico
+                    choice = net_digest[0] % 3  # 0: 10/8, 1: 172.16/12, 2: 192.168/16
+                    if choice == 0:
+                        b0 = 10
+                        b1 = net_digest[1]
+                        b2 = net_digest[2]
+                    elif choice == 1:
+                        b0 = 172
+                        b1 = 16 + (net_digest[1] % 16)  # 16..31
+                        b2 = net_digest[2]
+                    else:
+                        b0 = 192
+                        b1 = 168
+                        b2 = net_digest[2]
+                    b3 = 0
+                    net_val_full = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+                else:
+                    # Genera prefisso pubblico, evitando RFC1918
+                    b0 = (net_digest[0] % 223) + 1  # 1..223
+                    # Evita 10, 172, 192 (per non cadere in RFC1918) e 127
+                    forbidden_first = {10, 127, 172, 192}
+                    k = 1
+                    while b0 in forbidden_first and k < 8:
+                        b0 = ((b0 + net_digest[k]) % 223) + 1
+                        k += 1
+                    b1 = net_digest[1]
+                    # Evita 172.16-31 e 192.168
+                    if b0 == 172 and 16 <= b1 <= 31:
+                        b1 = (net_digest[2] % 16)  # 0..15
+                    if b0 == 192 and b1 == 168:
+                        b1 = (b1 + net_digest[3] + 1) % 256
+                    b2 = net_digest[2]
+                    b3 = 0
+                    net_val_full = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+
+                anon_net_prefix = (net_val_full >> (32 - m)) << (32 - m)
+
+                # Calcola la parte host anonima
+                host_bits = 32 - m
+                if host_bits == 0:
+                    host_val = 0
+                else:
+                    host_digest = self._hmac_digest(f"HOSTv4|{ip}")
+                    host_space = 1 << host_bits
+                    host_val = int.from_bytes(host_digest[:4], "big") % host_space
+                    # Evita indirizzi speciali 0 e broadcast quando possibile
+                    if host_space >= 4:
+                        host_val = 1 + (host_val % (host_space - 2))
+
+                anon_int = anon_net_prefix | host_val
+                anonymized = str(ipaddress.IPv4Address(anon_int))
+
             else:
-                # IPv6 - implementazione base
-                anonymized = str(ipaddress.IPv6Address(int.from_bytes(hash_digest[:16], 'big')))
-            
-            self._cache[ip_str] = anonymized
+                m = 64 if subnet_bits is None else max(0, min(128, int(subnet_bits)))
+                network = ipaddress.IPv6Network(f"{ip}/{m}", strict=False)
+
+                net_digest = self._hmac_digest(f"NETv6|{network.network_address}/{m}")
+                net_val_full = int.from_bytes(net_digest[:16], "big")
+                anon_net_prefix = (net_val_full >> (128 - m)) << (128 - m)
+
+                host_bits = 128 - m
+                if host_bits == 0:
+                    host_val = 0
+                else:
+                    host_digest = self._hmac_digest(f"HOSTv6|{ip}")
+                    host_space = 1 << host_bits
+                    host_val = int.from_bytes(host_digest[:16], "big") % host_space
+
+                anon_int = anon_net_prefix | host_val
+                anonymized = str(ipaddress.IPv6Address(anon_int))
+
+            self._cache[cache_key] = anonymized
             return anonymized
-            
+
         except Exception as e:
             logger.warning(f"Errore nell'anonimizzazione IP {ip_str}: {e}")
             return ip_str
+
+    def anonymize_port(self, port_value: Union[int, str], preserve_class: bool = True) -> int:
+        """Anonimizza una porta in modo deterministico con HMAC.
+
+        - preserve_class=True mantiene la classe:
+          0-1023 (well-known), 1024-49151 (registered), 49152-65535 (dynamic)
+        """
+        try:
+            if port_value is None or port_value == "":
+                return 0
+            p = int(port_value)
+            if p < 0:
+                p = 0
+        except Exception:
+            # fallback per valori non numerici
+            p = 0
+
+        digest = self._hmac_digest(f"PORT|{p}")
+        rnd = int.from_bytes(digest[:4], "big")
+
+        if not preserve_class:
+            # mappa in [1, 65535]
+            return max(1, rnd % 65535)
+
+        # preserva le 3 classi IANA
+        if p <= 1023:
+            span = 1024
+            base = 0
+        elif p <= 49151:
+            span = 49151 - 1024 + 1
+            base = 1024
+        else:
+            span = 65535 - 49152 + 1
+            base = 49152
+
+        mapped = base + (rnd % span)
+        # evita 0
+        return 1 if mapped == 0 else mapped
+
+    def anonymize_mac(
+        self,
+        mac_value: Union[str, bytes],
+        preserve_ig_bit: bool = True,
+        force_locally_administered: bool = True,
+    ) -> str:
+        """Anonimizza MAC 48-bit in modo deterministico via HMAC.
+
+        - preserve_ig_bit: preserva il bit I/G (unicast/multicast)
+        - force_locally_administered: forza il bit U/L a 1 per evitare leak dell'OUI reale
+        """
+        if mac_value is None:
+            return "00:00:00:00:00:00"
+
+        try:
+            s = str(mac_value).strip().lower()
+            # estrai solo hex
+            hex_only = re.sub(r"[^0-9a-f]", "", s)
+            if len(hex_only) != 12:
+                return "00:00:00:00:00:00"
+
+            orig = int(hex_only, 16)
+            digest = self._hmac_digest(f"MAC|{hex_only}")
+            anon = int.from_bytes(digest[:6], "big")
+
+            # aggiusta il primo byte per I/G e U/L
+            orig_first = (orig >> 40) & 0xFF
+            anon_first = (anon >> 40) & 0xFF
+
+            # bit 0: I/G (0 unicast, 1 multicast)
+            if preserve_ig_bit:
+                ig = orig_first & 0x01
+                anon_first = (anon_first & 0xFE) | ig
+            else:
+                # default unicast
+                anon_first = (anon_first & 0xFE)
+
+            # bit 1: U/L (0 universal, 1 local). Forza locale per evitare OUI reali
+            if force_locally_administered:
+                anon_first = anon_first | 0x02
+
+            # ricostruisci i 6 byte
+            rest = anon & ((1 << 40) - 1)
+            anon_int = (anon_first << 40) | rest
+
+            # formatta con ':'
+            return ":".join(f"{(anon_int >> (8*(5-i))) & 0xFF:02x}" for i in range(6))
+        except Exception:
+            return "00:00:00:00:00:00"
 
 
 class SNNPreprocessor:
@@ -236,14 +409,21 @@ class SNNPreprocessor:
         """Encode feature numerica continua"""
         # Converti a numpy array, gestendo valori mancanti
         numeric_values = []
-        for val in values:
-            try:
-                if val is None or val == "":
+        # Supporto per anonimizzazione porta basata su HMAC
+        if config.encoding in ("crypto_port", "hmac_port") and self.crypto_pan:
+            preserve_class = True if config.preserve_port_class is None else bool(config.preserve_port_class)
+            for val in values:
+                anon_port = self.crypto_pan.anonymize_port(val, preserve_class=preserve_class)
+                numeric_values.append(float(anon_port))
+        else:
+            for val in values:
+                try:
+                    if val is None or val == "":
+                        numeric_values.append(np.nan)
+                    else:
+                        numeric_values.append(float(val))
+                except (ValueError, TypeError):
                     numeric_values.append(np.nan)
-                else:
-                    numeric_values.append(float(val))
-            except (ValueError, TypeError):
-                numeric_values.append(np.nan)
         
         arr = np.array(numeric_values)
         
@@ -266,13 +446,30 @@ class SNNPreprocessor:
             return self._hash_numeric_encode(values, config)
         elif config.encoding == "ordinal":
             return self._ordinal_encode(values, config)
+        elif config.encoding in ("crypto_mac", "hmac_mac") and self.crypto_pan:
+            # Anonimizza MAC e poi applica hashing numerico stabile
+            anon = [self.crypto_pan.anonymize_mac(v) for v in values]
+            # Mappa in [0,1] con hash stabile
+            numeric_values = []
+            for val in anon:
+                h = hashlib.sha256(val.encode("utf-8")).digest()
+                numeric_values.append(int.from_bytes(h[:4], "big") / (2**32 - 1))
+            return np.array(numeric_values)
         else:
             raise ValueError(f"Encoding categorico non supportato: {config.encoding}")
     
     def encode_ip_feature(self, values: List[Any], config: SNNFeatureConfig) -> np.ndarray:
         """Encode feature IP"""
         if config.encoding == "crypto_pan" and self.crypto_pan:
-            anonymized_values = [self.crypto_pan.anonymize_ip(str(val)) for val in values]
+            # Determina i bit di subnet dalla config; default 24 per IPv4, 64 per IPv6
+            subnet_bits = config.subnet_bits
+            def default_bits(v: Any) -> int:
+                s = str(v)
+                return 24 if "." in s else 64
+            bits = subnet_bits if subnet_bits is not None else (default_bits(next((v for v in values if v is not None and v != ""), "0.0.0.0")))
+            anonymized_values = [
+                self.crypto_pan.anonymize_ip(str(val), subnet_bits=bits) for val in values
+            ]
             return self._ip_to_numeric(anonymized_values)
         elif config.encoding == "secure_hash":
             return self._secure_hash_encode(values, config)

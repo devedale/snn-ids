@@ -2,10 +2,10 @@
 # Nota: per Colab evitiamo di includere i requisiti base del progetto per non incorrere in conflitti (numpy ecc.)
 
 # Versioni compatibili con NengoDL su Colab (stack TF 2.12.x con tf-keras)
-# Nota: TF 2.12 + tf-keras fornisce keras.engine stabile per NengoDL 3.6.0
+# Nota: TF 2.12 + tf-keras 2.15 fornisce keras.engine stabile per NengoDL 3.6.0
 
 tensorflow==2.12.1
-tf-keras==2.12.0
+tf-keras==2.15.0
 nengo==3.2.0
 nengo-dl==3.6.0
 

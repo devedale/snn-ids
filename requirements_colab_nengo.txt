@@ -2,18 +2,19 @@
 # Include i requisiti base del progetto
 -r requirements.txt
 
-# Versioni compatibili con NengoDL su Colab (Python 3.11)
-# Lasciamo scegliere a TensorFlow la versione di numpy compatibile
+# Versioni compatibili con NengoDL su Colab (stack Keras 2.13.x)
+# Nota: TF 2.13.x espone keras.engine compatibile con NengoDL 3.6.0
 
-tensorflow==2.15.0.post1
-tf-keras==2.15.0
-keras==2.15.0
+tensorflow==2.13.1
+tf-keras==2.13.1
+keras==2.13.1
 nengo==3.2.0
 nengo-dl==3.6.0
 
 pandas>=1.5.0
 scikit-learn>=1.2.0
 pyyaml>=6.0
-typing_extensions==4.12.2
+# typing_extensions coerente con TF 2.13 stack
+typing_extensions==4.5.0
 ml-dtypes==0.2.0
 

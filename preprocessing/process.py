@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
 
 """
-Modulo per il Preprocessing dei Dati di Cybersecurity.
+Modulo per il Preprocessing Avanzato dei Dati.
 
-Contiene funzioni per caricare, trasformare e preparare i dati di rete
-per il training, seguendo le specifiche in `config.py`.
-Include l'anonimizzazione di IP, one-hot encoding e la gestione del target.
+Include logiche per:
+- Anonimizzazione e One-Hot Encoding.
+- Creazione di finestre temporali (time windows) per modelli sequenziali.
 """
 
 import pandas as pd
+import numpy as np
 import json
 import os
-import numpy as np
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 # Importa le configurazioni
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import DATA_CONFIG, PREDICTION_CONFIG
+from config import DATA_CONFIG, PREPROCESSING_CONFIG, PREDICTION_CONFIG
 
 def save_json_map(data, path):
     """Salva un dizionario in un file JSON, creando la directory se non esiste."""
@@ -28,84 +28,80 @@ def save_json_map(data, path):
 
 def preprocess_data():
     """
-    Esegue il preprocessing completo dei dati di cybersecurity.
-
-    Returns:
-        tuple: (X, y, ip_map, target_map)
+    Esegue il preprocessing completo, inclusa la creazione di finestre temporali.
     """
-    print("Inizio del preprocessing dei dati di cybersecurity...")
+    print("Inizio del preprocessing avanzato dei dati...")
 
-    # 1. Caricamento del dataset
-    try:
-        df = pd.read_csv(DATA_CONFIG["dataset_path"])
-        print(f"Dataset caricato da: {DATA_CONFIG['dataset_path']}")
-    except FileNotFoundError:
-        print(f"Errore: Il file {DATA_CONFIG['dataset_path']} non è stato trovato.")
-        return None, None, None, None
+    # 1. Caricamento e ordinamento dei dati
+    df = pd.read_csv(DATA_CONFIG["dataset_path"])
+    df[DATA_CONFIG["timestamp_column"]] = pd.to_datetime(df[DATA_CONFIG["timestamp_column"]])
+    df = df.sort_values(by=DATA_CONFIG["timestamp_column"]).reset_index(drop=True)
 
-    # 2. Anonimizzazione degli indirizzi IP
-    ip_map = {}
-    ip_data = pd.DataFrame()
-    if DATA_CONFIG.get("ip_columns_to_anonymize"):
-        all_ips = pd.concat([df[col] for col in DATA_CONFIG["ip_columns_to_anonymize"]]).unique()
-        ip_encoder = LabelEncoder().fit(all_ips)
+    # 2. Label Encoding del target
+    target_encoder = LabelEncoder()
+    df[DATA_CONFIG["target_column"]] = target_encoder.fit_transform(df[DATA_CONFIG["target_column"]])
+    target_map = {
+        "map": {label: int(code) for label, code in zip(target_encoder.classes_, target_encoder.transform(target_encoder.classes_))},
+        "inverse_map": {str(code): label for code, label in enumerate(target_encoder.classes_)}
+    }
+    save_json_map(target_map, PREDICTION_CONFIG["target_anonymization_map_path"])
 
-        for col in DATA_CONFIG["ip_columns_to_anonymize"]:
-            ip_data[f"{col}_id"] = ip_encoder.transform(df[col])
+    # 3. Anonimizzazione IP
+    all_ips = pd.concat([df[col] for col in DATA_CONFIG["ip_columns_to_anonymize"]]).unique()
+    ip_encoder = LabelEncoder().fit(all_ips)
+    for col in DATA_CONFIG["ip_columns_to_anonymize"]:
+        df[col] = ip_encoder.transform(df[col])
+    ip_map = {
+        "map": {ip: int(code) for ip, code in zip(ip_encoder.classes_, ip_encoder.transform(ip_encoder.classes_))},
+        "inverse_map": {str(code): ip for code, ip in enumerate(ip_encoder.classes_)}
+    }
+    save_json_map(ip_map, PREDICTION_CONFIG["ip_anonymization_map_path"])
 
-        ip_map = {
-            "map": {ip: int(code) for ip, code in zip(ip_encoder.classes_, ip_encoder.transform(ip_encoder.classes_))},
-            "inverse_map": {int(code): ip for ip, code in zip(ip_encoder.classes_, ip_encoder.transform(ip_encoder.classes_))}
-        }
-        save_json_map(ip_map, PREDICTION_CONFIG["ip_anonymization_map_path"])
+    # 4. One-Hot Encoding per le feature categoriche
+    df = pd.get_dummies(df, columns=[col for col in DATA_CONFIG["feature_columns"] if df[col].dtype == 'object'])
 
-    # 3. One-hot encoding
-    categorical_data = pd.get_dummies(df[DATA_CONFIG["one_hot_encode_columns"]], drop_first=True)
-    print(f"Eseguito one-hot encoding per: {DATA_CONFIG['one_hot_encode_columns']}")
+    # 5. Normalizzazione delle feature numeriche
+    numeric_cols = df.select_dtypes(include=np.number).columns.drop(DATA_CONFIG["target_column"])
+    scaler = StandardScaler()
+    df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
 
-    # 4. Selezione delle feature numeriche
-    numeric_data = df[DATA_CONFIG["numeric_feature_columns"]]
+    # 6. Salva l'ordine finale delle colonne
+    final_feature_columns = list(df.columns.drop([DATA_CONFIG["target_column"], DATA_CONFIG["timestamp_column"]]))
+    save_json_map(final_feature_columns, PREDICTION_CONFIG["column_order_path"])
 
-    # 5. Combinazione di tutte le feature processate in X
-    X = pd.concat([numeric_data, ip_data, categorical_data], axis=1)
+    features_df = df[final_feature_columns].astype(np.float32)
+    target_series = df[DATA_CONFIG["target_column"]]
 
-    # Converte l'intero DataFrame in un tipo numerico per la compatibilità con TensorFlow
-    X = X.astype(np.float32)
+    # 7. Creazione delle finestre temporali
+    if not PREPROCESSING_CONFIG["use_time_windows"]:
+        print("Creazione finestre temporali disabilitata. Ritorno i dati come sequenza piatta.")
+        return features_df.values, target_series.values
 
-    print("Feature finali per il training:", list(X.columns))
+    print(f"Creazione finestre temporali (size={PREPROCESSING_CONFIG['window_size']}, step={PREPROCESSING_CONFIG['step']})...")
 
-    # 6. Gestione della colonna Target
-    y = df[DATA_CONFIG["target_column"]]
-    target_map = None
-    if DATA_CONFIG["anonymize_target"]:
-        target_encoder = LabelEncoder()
-        y_encoded = target_encoder.fit_transform(y)
+    X, y = [], []
+    window_size = PREPROCESSING_CONFIG['window_size']
+    step = PREPROCESSING_CONFIG['step']
 
-        target_map = {
-            "map": {label: int(code) for label, code in zip(target_encoder.classes_, target_encoder.transform(target_encoder.classes_))},
-            "inverse_map": {int(code): label for label, code in zip(target_encoder.classes_, target_encoder.transform(target_encoder.classes_))}
-        }
-        y = pd.Series(y_encoded, name=DATA_CONFIG["target_column"])
-        save_json_map(target_map, PREDICTION_CONFIG["target_anonymization_map_path"])
+    for i in range(0, len(features_df) - window_size + 1, step):
+        window = features_df.iloc[i : i + window_size].values
+        # L'etichetta della finestra è quella dell'ultimo elemento
+        label = target_series.iloc[i + window_size - 1]
+        X.append(window)
+        y.append(label)
 
-    print("Preprocessing completato.")
-    return X, y, ip_map, target_map
+    X = np.array(X)
+    y = np.array(y)
+
+    print(f"Preprocessing completato. Shape di X: {X.shape}, Shape di y: {y.shape}")
+    return X, y
 
 if __name__ == '__main__':
     # Esempio di utilizzo del modulo
-    X_processed, y_processed, ip_map, target_map = preprocess_data()
-
+    X_processed, y_processed = preprocess_data()
     if X_processed is not None:
-        print("\n--- Anteprima dei dati processati ---")
-        print("Prime 5 righe delle feature (X):")
-        print(X_processed.head())
-        print("\nPrime 5 righe del target (y):")
-        print(y_processed.head())
-
-        if ip_map:
-            print("\n--- Mappa di Anonimizzazione IP (primi 5) ---")
-            print({k: v for i, (k, v) in enumerate(ip_map['map'].items()) if i < 5})
-
-        if target_map:
-            print("\n--- Mappa di Anonimizzazione Target ---")
-            print(json.dumps(target_map, indent=2))
+        print("\n--- Esempio di dati processati ---")
+        print("Forma di X:", X_processed.shape)
+        print("Forma di y:", y_processed.shape)
+        print("Primo campione di X:\n", X_processed[0])
+        print("Prima etichetta di y:", y_processed[0])

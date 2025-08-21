@@ -99,7 +99,7 @@ def preprocess_data(config_override=None):
     scaler = StandardScaler()
     df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
 
-    final_feature_columns = [col for col in df.columns if col not in [data_config["target_column"], data_config["timestamp_column"]]]
+    final_feature_columns = numeric_cols
     save_json_map(final_feature_columns, pred_config["column_order_path"])
 
     features_df = df[final_feature_columns].astype(np.float32)

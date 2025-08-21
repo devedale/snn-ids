@@ -33,6 +33,14 @@ def build_model(model_type, input_shape, num_classes, params):
             tf.keras.layers.Dense(units=params['lstm_units'] // 2, activation=params['activation']),
             tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
+    elif model_type == 'gru':
+        model = tf.keras.models.Sequential([
+            tf.keras.layers.Input(shape=input_shape),
+            tf.keras.layers.GRU(units=params['gru_units'], activation=params['activation']),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(units=params['gru_units'] // 2, activation=params['activation']),
+            tf.keras.layers.Dense(num_classes, activation='softmax')
+        ])
     elif model_type == 'dense':
         model = tf.keras.models.Sequential([
             tf.keras.layers.Input(shape=input_shape),

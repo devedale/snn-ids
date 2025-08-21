@@ -4,6 +4,7 @@
 Modulo per il Training Avanzato del Modello.
 
 Supporta diverse architetture (Dense, LSTM) e strategie di validazione (K-Fold).
+È stato refattorizzato per accettare dati pre-processati come input.
 """
 
 import os
@@ -17,7 +18,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import TRAINING_CONFIG, PREPROCESSING_CONFIG
+from config import TRAINING_CONFIG
 from preprocessing.process import preprocess_data
 
 def build_model(model_type, input_shape, num_classes, params):
@@ -33,7 +34,6 @@ def build_model(model_type, input_shape, num_classes, params):
             tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     elif model_type == 'dense':
-        # Per un modello denso, l'input deve essere appiattito
         model = tf.keras.models.Sequential([
             tf.keras.layers.Input(shape=input_shape),
             tf.keras.layers.Flatten(),
@@ -49,14 +49,22 @@ def build_model(model_type, input_shape, num_classes, params):
     model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-def train_and_evaluate():
-    """Orchestra il processo di training e valutazione con opzioni avanzate."""
+def train_and_evaluate(X=None, y=None):
+    """
+    Orchestra il processo di training e valutazione.
+
+    Args:
+        X (np.array, optional): Feature pre-processate. Se None, verranno caricate.
+        y (np.array, optional): Etichette pre-processate. Se None, verranno caricate.
+    """
     print("Avvio del processo di training avanzato...")
 
-    X, y = preprocess_data()
-    if X is None:
-        print("Training interrotto a causa di errori nel preprocessing.")
-        return
+    if X is None or y is None:
+        print("Dati non forniti, avvio il preprocessing completo...")
+        X, y = preprocess_data()
+        if X is None:
+            print("Training interrotto a causa di errori nel preprocessing.")
+            return None, None
 
     hyperparams = TRAINING_CONFIG['hyperparameters']
     param_combinations = [dict(zip(hyperparams.keys(), v)) for v in itertools.product(*hyperparams.values())]
@@ -80,13 +88,9 @@ def train_and_evaluate():
 
                 input_shape = X_train.shape[1:]
                 num_classes = len(np.unique(y))
-
                 model = build_model(TRAINING_CONFIG['model_type'], input_shape, num_classes, params)
-
                 model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
-
                 loss, accuracy = model.evaluate(X_val, y_val, verbose=0)
-                print(f"Accuratezza Fold: {accuracy:.4f}")
                 fold_accuracies.append(accuracy)
 
             avg_accuracy = np.mean(fold_accuracies)
@@ -94,12 +98,12 @@ def train_and_evaluate():
             current_run_accuracy = avg_accuracy
 
         elif TRAINING_CONFIG['validation_strategy'] == 'train_test_split':
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TRAINING_CONFIG.get("test_size", 0.2), random_state=42, stratify=y)
             input_shape = X_train.shape[1:]
             num_classes = len(np.unique(y))
 
             model = build_model(TRAINING_CONFIG['model_type'], input_shape, num_classes, params)
-            model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], validation_data=(X_test, y_test), verbose=0)
+            model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], validation_data=(X_test, y_test), verbose=1)
             loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
             print(f"Accuratezza Test Set: {accuracy:.4f}")
             current_run_accuracy = accuracy
@@ -111,8 +115,6 @@ def train_and_evaluate():
 
         if current_run_accuracy > best_accuracy:
             best_accuracy = current_run_accuracy
-            # Per semplicità, salviamo l'ultimo modello addestrato in questa combinazione
-            # In un caso reale, si potrebbe ri-addestrare sui dati completi
             output_path = TRAINING_CONFIG['output_path']
             os.makedirs(output_path, exist_ok=True)
             best_model_path = os.path.join(output_path, 'best_model.keras')
@@ -123,7 +125,7 @@ def train_and_evaluate():
     with open(log_path, 'w') as f:
         json.dump(training_log, f, indent=4)
 
-    print(f"\nTraining completato. Migliore accuratezza media ottenuta: {best_accuracy:.4f}")
+    print(f"\nTraining completato. Migliore accuratezza ottenuta: {best_accuracy:.4f}")
     return training_log, best_model_path
 
 if __name__ == '__main__':

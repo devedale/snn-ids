@@ -24,16 +24,27 @@ def save_json_map(data, path):
     print(f"Mappa salvata in: {path}")
 
 def load_data_from_directory(path, sample_size=None):
+    """
+    Carica i dati da una directory di file CSV.
+    Se sample_size è specificato, carica in modo efficiente solo le prime N righe
+    dal primo file per evitare un consumo eccessivo di memoria.
+    """
     all_files = glob.glob(os.path.join(path, "*.csv"))
     if not all_files:
         print(f"Attenzione: Nessun file CSV trovato in '{path}'.")
         return pd.DataFrame()
 
-    df_list = [pd.read_csv(f, low_memory=False) for f in all_files]
-    df = pd.concat(df_list, ignore_index=True)
-
     if sample_size:
-        df = df.head(sample_size)
+        print(f"Modalità sample: lettura delle prime {sample_size} righe da '{all_files[0]}' per efficienza di memoria.")
+        # Utilizziamo il parametro nrows per leggere solo l'inizio del file,
+        # evitando di caricare l'intero dataset in memoria per un semplice campione.
+        df = pd.read_csv(all_files[0], low_memory=False, nrows=sample_size)
+    else:
+        # Se non stiamo campionando, carichiamo tutti i file.
+        print(f"Caricamento completo del dataset da {len(all_files)} file...")
+        df_list = [pd.read_csv(f, low_memory=False) for f in all_files]
+        df = pd.concat(df_list, ignore_index=True)
+
     return df
 
 def preprocess_data(config_override=None):

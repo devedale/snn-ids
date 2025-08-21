@@ -2,9 +2,7 @@
 
 """
 Modulo per il Training Avanzato del Modello.
-
-Supporta diverse architetture (Dense, LSTM) e strategie di validazione (K-Fold).
-È stato refattorizzato per accettare dati pre-processati come input.
+Refattorizzato per accettare override della configurazione.
 """
 
 import os
@@ -13,32 +11,35 @@ import json
 import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import train_test_split, KFold
+from copy import deepcopy
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import TRAINING_CONFIG
+from config import TRAINING_CONFIG as TC
 from preprocessing.process import preprocess_data
 
 def build_model(model_type, input_shape, num_classes, params):
     """Costruisce un modello Keras in base al tipo specificato."""
     print(f"Costruzione del modello di tipo: {model_type}")
 
+    units = params.get('lstm_units', params.get('gru_units', 64))
+
     if model_type == 'lstm':
         model = tf.keras.models.Sequential([
             tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.LSTM(units=params['lstm_units'], activation=params['activation']),
+            tf.keras.layers.LSTM(units=units, activation=params['activation']),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units=params['lstm_units'] // 2, activation=params['activation']),
+            tf.keras.layers.Dense(units=units // 2, activation=params['activation']),
             tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     elif model_type == 'gru':
         model = tf.keras.models.Sequential([
             tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.GRU(units=params['gru_units'], activation=params['activation']),
+            tf.keras.layers.GRU(units=units, activation=params['activation']),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units=params['gru_units'] // 2, activation=params['activation']),
+            tf.keras.layers.Dense(units=units // 2, activation=params['activation']),
             tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     elif model_type == 'dense':
@@ -57,24 +58,23 @@ def build_model(model_type, input_shape, num_classes, params):
     model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-def train_and_evaluate(X=None, y=None):
+def train_and_evaluate(X=None, y=None, config_override=None):
     """
     Orchestra il processo di training e valutazione.
-
-    Args:
-        X (np.array, optional): Feature pre-processate. Se None, verranno caricate.
-        y (np.array, optional): Etichette pre-processate. Se None, verranno caricate.
     """
-    print("Avvio del processo di training avanzato...")
+    train_config = deepcopy(TC)
+    if config_override:
+        train_config.update(config_override.get("TRAINING_CONFIG", {}))
+
+    print(f"--- Avvio Training (Strategia: {train_config['validation_strategy']}) ---")
 
     if X is None or y is None:
-        print("Dati non forniti, avvio il preprocessing completo...")
-        X, y = preprocess_data()
+        X, y = preprocess_data(config_override)
         if X is None:
             print("Training interrotto a causa di errori nel preprocessing.")
             return None, None
 
-    hyperparams = TRAINING_CONFIG['hyperparameters']
+    hyperparams = train_config['hyperparameters']
     param_combinations = [dict(zip(hyperparams.keys(), v)) for v in itertools.product(*hyperparams.values())]
 
     best_accuracy = 0
@@ -85,56 +85,46 @@ def train_and_evaluate(X=None, y=None):
         print(f"\n--- Inizio Grid Search: Combinazione {i+1}/{len(param_combinations)} ---")
         print(f"Parametri: {params}")
 
-        if TRAINING_CONFIG['validation_strategy'] == 'k_fold':
-            kf = KFold(n_splits=TRAINING_CONFIG['k_fold_splits'], shuffle=True, random_state=42)
-            fold_accuracies = []
+        model_type = train_config['model_type']
 
+        if train_config['validation_strategy'] == 'k_fold':
+            kf = KFold(n_splits=train_config['k_fold_splits'], shuffle=True, random_state=42)
+            fold_accuracies = []
             for fold, (train_index, val_index) in enumerate(kf.split(X, y)):
-                print(f"-- Fold {fold+1}/{TRAINING_CONFIG['k_fold_splits']} --")
+                print(f"-- Fold {fold+1}/{train_config['k_fold_splits']} --")
                 X_train, X_val = X[train_index], X[val_index]
                 y_train, y_val = y[train_index], y[val_index]
-
-                input_shape = X_train.shape[1:]
-                num_classes = len(np.unique(y))
-                model = build_model(TRAINING_CONFIG['model_type'], input_shape, num_classes, params)
+                model = build_model(model_type, X_train.shape[1:], len(np.unique(y)), params)
                 model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
-                loss, accuracy = model.evaluate(X_val, y_val, verbose=0)
+                _, accuracy = model.evaluate(X_val, y_val, verbose=0)
                 fold_accuracies.append(accuracy)
-
             avg_accuracy = np.mean(fold_accuracies)
             print(f"Accuratezza media K-Fold: {avg_accuracy:.4f}")
             current_run_accuracy = avg_accuracy
 
-        elif TRAINING_CONFIG['validation_strategy'] == 'train_test_split':
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TRAINING_CONFIG.get("test_size", 0.2), random_state=42, stratify=y)
-            input_shape = X_train.shape[1:]
-            num_classes = len(np.unique(y))
-
-            model = build_model(TRAINING_CONFIG['model_type'], input_shape, num_classes, params)
+        elif train_config['validation_strategy'] == 'train_test_split':
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=train_config.get("test_size", 0.2), random_state=42, stratify=y)
+            model = build_model(model_type, X_train.shape[1:], len(np.unique(y)), params)
             model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], validation_data=(X_test, y_test), verbose=1)
-            loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+            _, accuracy = model.evaluate(X_test, y_test, verbose=0)
             print(f"Accuratezza Test Set: {accuracy:.4f}")
             current_run_accuracy = accuracy
-
         else:
-            raise ValueError(f"Strategia di validazione non supportata: {TRAINING_CONFIG['validation_strategy']}")
+            raise ValueError(f"Strategia di validazione non supportata: {train_config['validation_strategy']}")
 
         training_log.append({'params': params, 'accuracy': current_run_accuracy})
 
         if current_run_accuracy > best_accuracy:
             best_accuracy = current_run_accuracy
-            output_path = TRAINING_CONFIG['output_path']
+            output_path = train_config['output_path']
             os.makedirs(output_path, exist_ok=True)
             best_model_path = os.path.join(output_path, 'best_model.keras')
             model.save(best_model_path)
             print(f"Nuovo modello migliore trovato con accuratezza {best_accuracy:.4f}. Salvato in: {best_model_path}")
 
-    log_path = os.path.join(TRAINING_CONFIG['output_path'], 'training_log.json')
+    log_path = os.path.join(train_config['output_path'], 'training_log.json')
     with open(log_path, 'w') as f:
         json.dump(training_log, f, indent=4)
 
     print(f"\nTraining completato. Migliore accuratezza ottenuta: {best_accuracy:.4f}")
     return training_log, best_model_path
-
-if __name__ == '__main__':
-    train_and_evaluate()

@@ -101,12 +101,16 @@ TRAINING_CONFIG = {
     "output_path": "models/",
 
     # --- Validation Strategy ---
-    # Rationale: 'train_test_split' is chosen for faster iteration on large
-    #            datasets. 'k_fold' is more robust but computationally expensive.
-    #            This parameter allows for easy switching between the two.
-    "validation_strategy": "train_test_split",
-    "test_size": 0.2,  # Used only if validation_strategy is 'train_test_split'
-    "k_fold_splits": 5,      # Used only if validation_strategy is 'k_fold'
+    # Rationale: This parameter allows for dynamic selection of the validation
+    #            method, enabling a trade-off between speed and robustness.
+    # Options:
+    #  - 'k_fold': More robust evaluation, recommended for final performance
+    #              assessment. Computationally expensive.
+    #  - 'train_test_split': Faster, ideal for quick experiments, smoke tests,
+    #                        and iterative development.
+    "validation_strategy": "k_fold",
+    "test_size": 0.2,          # Used only if validation_strategy is 'train_test_split'
+    "k_fold_splits": 5,          # Used only if validation_strategy is 'k_fold'
 
     # --- Model Architecture Selection ---
     # Rationale: Allows for dynamic selection of the model architecture. This

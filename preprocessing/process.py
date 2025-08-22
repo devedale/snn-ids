@@ -178,6 +178,25 @@ def _balance_cybersecurity(df: pd.DataFrame, target_size: Optional[int], benign_
     print(f"✅ Dataset bilanciato: {len(balanced_df)} righe")
     print(f"  📊 BENIGN: {len(benign_sampled)} ({len(benign_sampled)/len(balanced_df)*100:.1f}%)")
     print(f"  🔴 ATTACCHI: {len(malicious_combined)} ({len(malicious_combined)/len(balanced_df)*100:.1f}%)")
+
+    # Garanzia minima per classe: necessario per StratifiedKFold
+    # Richiede almeno n_splits campioni per ciascuna classe; duplichiamo con replace se serve (oversampling mirato)
+    required_per_class = max(2, TRAINING_CONFIG.get("k_fold_splits", 5))
+    counts = balanced_df['Label'].value_counts()
+    rare_labels = counts[counts < required_per_class].index.tolist()
+    if rare_labels:
+        print(f"  ⚠️ Classi con meno di {required_per_class} campioni: {len(rare_labels)}. Avvio oversampling mirato…")
+        oversampled_chunks = [balanced_df]
+        rng = np.random.RandomState(42)
+        for lbl in rare_labels:
+            cur = balanced_df[balanced_df['Label'] == lbl]
+            need = required_per_class - len(cur)
+            if len(cur) == 0:
+                continue
+            dup = cur.sample(n=need, replace=True, random_state=42)
+            oversampled_chunks.append(dup)
+        balanced_df = pd.concat(oversampled_chunks, ignore_index=True).sample(frac=1.0, random_state=42).reset_index(drop=True)
+        print(f"  ✅ Oversampling completato. Nuova dimensione: {len(balanced_df)}")
     
     return balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
 

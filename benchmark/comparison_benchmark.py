@@ -118,23 +118,79 @@ class CryptoPanComparisonBenchmark:
             with open(map_path, 'w') as f:
                 json.dump(ip_map, f, indent=4)
         
-        # Preprocessing standard
+        # Preprocessing diretto delle finestre temporali
         try:
-            print("  Preprocessing dati...")
-            # Import locale per evitare import circolari
-            from preprocessing.process import preprocess_data
-            X_processed, y_processed = preprocess_data({
-                'PREPROCESSING_CONFIG': {
-                    'sample_size': None,  # Usa tutti i dati delle finestre
-                    'use_time_windows': False  # I dati sono già in finestre
-                }
-            })
+            print("  Preprocessing finestre temporali...")
             
-            if X_processed is None or y_processed is None:
-                return {'error': 'Errore nel preprocessing'}
+            # Estrai features e target dalle finestre
+            feature_columns = [col for col in windowed_df.columns 
+                             if col not in ['window_start', 'window_end', 'window_resolution', 'window_size', 'Label']]
+            
+            # Converti colonne non numeriche in numeriche
+            for col in feature_columns:
+                if col in windowed_df.columns:
+                    # Prova a convertire in numerico, se fallisce usa 0
+                    try:
+                        windowed_df[col] = pd.to_numeric(windowed_df[col], errors='coerce').fillna(0)
+                    except:
+                        windowed_df[col] = 0
+            
+            # Filtra solo colonne numeriche
+            feature_columns = [col for col in feature_columns 
+                             if windowed_df[col].dtype in ['int64', 'float64', 'float32']]
+            
+            # Raggruppa per finestra e crea sequenze
+            window_groups = windowed_df.groupby(['window_start', 'window_end'])
+            X_processed, y_processed = [], []
+            
+            # Trova la dimensione massima delle finestre
+            max_window_size = 0
+            for (start, end), group in window_groups:
+                max_window_size = max(max_window_size, len(group))
+            
+            # Usa una dimensione fissa per tutte le finestre
+            target_window_size = min(max_window_size, 20)  # Massimo 20 timesteps
+            
+            for (start, end), group in window_groups:
+                if len(group) >= 5:  # Minimo 5 record per finestra
+                    # Estrai features
+                    features = group[feature_columns].values
+                    
+                    # Pad o tronca alla dimensione target
+                    if len(features) < target_window_size:
+                        # Pad con zeri se la finestra è troppo piccola
+                        padding = np.zeros((target_window_size - len(features), len(feature_columns)))
+                        features = np.vstack([features, padding])
+                    elif len(features) > target_window_size:
+                        # Tronca se la finestra è troppo grande
+                        features = features[:target_window_size]
+                    
+                    # Usa l'ultimo record della finestra come etichetta
+                    if 'Label' in group.columns:
+                        try:
+                            label = int(group['Label'].iloc[-1])
+                        except (ValueError, TypeError):
+                            label = 0
+                    else:
+                        label = 0
+                    
+                    X_processed.append(features)
+                    y_processed.append(label)
+            
+            if not X_processed:
+                return {'error': 'Nessuna finestra valida per il training'}
+            
+            X_processed = np.array(X_processed)
+            y_processed = np.array(y_processed)
             
             print(f"  Features processate: {X_processed.shape}")
             print(f"  Etichette: {y_processed.shape}")
+            print(f"  Dimensione finestra target: {target_window_size}")
+            print(f"  Numero di finestre valide: {len(X_processed)}")
+            print(f"  Colonne features utilizzate: {len(feature_columns)}")
+            print(f"  Esempio prima finestra: {X_processed[0].shape if len(X_processed) > 0 else 'N/A'}")
+            print(f"  Etichette uniche: {np.unique(y_processed)}")
+            print(f"  Distribuzione etichette: {np.bincount(y_processed)}")
             
             # Training e valutazione
             print("  Training modello...")
@@ -165,10 +221,13 @@ class CryptoPanComparisonBenchmark:
             best_model = tf.keras.models.load_model(best_model_path)
             
             # Genera predizioni per le statistiche
-            if len(X_processed.shape) > 2:
-                X_reshaped = X_processed.reshape(-1, X_processed.shape[-1])
-            else:
+            # Mantieni la forma 3D per i modelli sequenziali
+            if len(X_processed.shape) == 3:
+                # Per modelli sequenziali (LSTM/GRU), mantieni la forma (samples, timesteps, features)
                 X_reshaped = X_processed
+            else:
+                # Per modelli densi, ridimensiona in 2D
+                X_reshaped = X_processed.reshape(-1, X_processed.shape[-1])
             
             y_pred_proba = best_model.predict(X_reshaped, verbose=0)
             y_pred = np.argmax(y_pred_proba, axis=1)

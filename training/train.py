@@ -24,6 +24,9 @@ from evaluation.stats import generate_comprehensive_report, print_summary_to_con
 def build_model(model_type, input_shape, num_classes, params):
     """Costruisce un modello Keras in base al tipo specificato."""
     print(f"Costruzione del modello di tipo: {model_type}")
+    print(f"Input shape ricevuto: {input_shape}")
+    print(f"Tipo input_shape: {type(input_shape)}")
+    print(f"Lunghezza input_shape: {len(input_shape) if hasattr(input_shape, '__len__') else 'N/A'}")
 
     units = params.get('lstm_units', params.get('gru_units', 64))
 
@@ -56,7 +59,22 @@ def build_model(model_type, input_shape, num_classes, params):
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=params['learning_rate'])
-    model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    
+    # Gestisci il caso di una sola classe
+    if num_classes == 1:
+        # Per una sola classe, usa binary crossentropy e sigmoid
+        model = tf.keras.models.Sequential([
+            tf.keras.layers.Input(shape=input_shape),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(64, activation=params['activation']),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=['accuracy'])
+    else:
+        # Per multiple classi, usa sparse categorical crossentropy
+        model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    
     return model
 
 def train_and_evaluate(X=None, y=None, config_override=None):
@@ -120,7 +138,12 @@ def train_and_evaluate(X=None, y=None, config_override=None):
             output_path = train_config['output_path']
             os.makedirs(output_path, exist_ok=True)
             best_model_path = os.path.join(output_path, 'best_model.keras')
-            model.save(best_model_path)
+            try:
+                model.save(best_model_path, save_format='keras')
+            except:
+                # Fallback per versioni più vecchie di Keras
+                best_model_path = os.path.join(output_path, 'best_model.h5')
+                model.save(best_model_path, save_format='h5')
             print(f"Nuovo modello migliore trovato con accuratezza {best_accuracy:.4f}. Salvato in: {best_model_path}")
 
     log_path = os.path.join(train_config['output_path'], 'training_log.json')

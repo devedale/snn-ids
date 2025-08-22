@@ -236,7 +236,7 @@ def main():
             'save_intermediate_results': True,
             'generate_comparison_plots': True,
             'min_window_size': 5,
-            'model_type': 'dense',  # Usa modello Dense per evitare problemi LSTM
+            'model_type': 'gru',  # Usa modello GRU per dati sequenziali
             'test_configs': [
                 {'name': 'baseline', 'use_cryptopan': False, 'description': 'Baseline senza anonimizzazione'},
                 {'name': 'cryptopan', 'use_cryptopan': True, 'description': 'Con anonimizzazione Crypto-PAn'}

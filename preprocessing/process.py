@@ -16,12 +16,21 @@ from copy import deepcopy
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import DATA_CONFIG as DC, PREPROCESSING_CONFIG as PC, PREDICTION_CONFIG as PredC
+from crypto import cryptopan_ip
 
 def save_json_map(data, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         json.dump(data, f, indent=4)
     print(f"Mappa salvata in: {path}")
+
+def generate_cryptopan_key():
+    """
+    Genera una chiave segreta per Crypto-PAn.
+    In produzione, questa dovrebbe essere gestita in modo sicuro.
+    """
+    import secrets
+    return secrets.token_bytes(32)  # 256 bit per SHA-256
 
 def load_data_from_directory(path, sample_size=None):
     """
@@ -82,14 +91,31 @@ def preprocess_data(config_override=None):
     }
     save_json_map(target_map, pred_config["target_anonymization_map_path"])
 
+    # Genera chiave segreta per Crypto-PAn
+    cryptopan_key = generate_cryptopan_key()
+    print(f"Chiave Crypto-PAn generata: {cryptopan_key.hex()}")
+    
+    # Anonimizza gli IP usando Crypto-PAn
     all_ips = pd.concat([df[col] for col in data_config["ip_columns_to_anonymize"]]).unique()
-    ip_encoder = LabelEncoder().fit(all_ips)
-    for col in data_config["ip_columns_to_anonymize"]:
-        df[col] = ip_encoder.transform(df[col])
+    
+    # Crea mappa di anonimizzazione Crypto-PAn
     ip_map = {
-        "map": {ip: int(code) for ip, code in zip(ip_encoder.classes_, ip_encoder.transform(ip_encoder.classes_))},
-        "inverse_map": {str(code): ip for code, ip in enumerate(ip_encoder.classes_)}
+        "cryptopan_key": cryptopan_key.hex(),  # Salva la chiave per la decrittografia
+        "map": {},  # IP originale -> IP anonimizzato
+        "inverse_map": {}  # IP anonimizzato -> IP originale
     }
+    
+    # Applica Crypto-PAn a tutti gli IP unici
+    for original_ip in all_ips:
+        if pd.notna(original_ip) and str(original_ip).strip():
+            anonymized_ip = cryptopan_ip(str(original_ip), cryptopan_key)
+            ip_map["map"][str(original_ip)] = anonymized_ip
+            ip_map["inverse_map"][anonymized_ip] = str(original_ip)
+    
+    # Applica l'anonimizzazione alle colonne
+    for col in data_config["ip_columns_to_anonymize"]:
+        df[col] = df[col].apply(lambda ip: ip_map["map"].get(str(ip), ip) if pd.notna(ip) else ip)
+    
     save_json_map(ip_map, pred_config["ip_anonymization_map_path"])
 
     categorical_features = [col for col in data_config["feature_columns"] if col in df.columns and df[col].dtype == 'object']

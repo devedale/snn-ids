@@ -43,7 +43,7 @@ DATA_CONFIG = {
     #            which is common for large, time-split datasets.
     # Assumption: All .csv files within this directory are part of the dataset
     #             and share a compatible schema.
-    "dataset_path": "data/CSECICIDS2018_improved/",
+    "dataset_path": "data/cicids",
 
     # --- Column Semantic Mapping ---
     # Rationale: Explicitly defines the roles of key columns. This avoids
@@ -83,6 +83,7 @@ PREPROCESSING_CONFIG = {
     #            "windows" (e.g., 10 consecutive events), which is required
     #            input for sequential models like LSTMs or GRUs. If False,
     #            each event is treated as an independent sample.
+    "sample_size": 10000,
     "use_time_windows": True,
     "window_size": 10,
     "step": 5,  # A step < window_size creates overlapping windows, augmenting the dataset.
@@ -126,7 +127,7 @@ TRAINING_CONFIG = {
     "hyperparameters": {
         "activation": ["relu"],
         "batch_size": [64],
-        "epochs": [20],
+        "epochs": [5],
         "learning_rate": [0.001],
         "lstm_units": [64],  # Used if model_type is 'lstm'
         "gru_units": [64],   # Used if model_type is 'gru'

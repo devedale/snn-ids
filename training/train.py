@@ -19,6 +19,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import TRAINING_CONFIG as TC
 from preprocessing.process import preprocess_data
+from evaluation.stats import generate_comprehensive_report, print_summary_to_console
 
 def build_model(model_type, input_shape, num_classes, params):
     """Costruisce un modello Keras in base al tipo specificato."""
@@ -127,4 +128,44 @@ def train_and_evaluate(X=None, y=None, config_override=None):
         json.dump(training_log, f, indent=4)
 
     print(f"\nTraining completato. Migliore accuratezza ottenuta: {best_accuracy:.4f}")
+    
+    # Genera statistiche complete e report
+    print("\n--- Generazione Statistiche e Report ---")
+    
+    # Carica il modello migliore per le predizioni
+    best_model = tf.keras.models.load_model(best_model_path)
+    
+    # Genera predizioni sul dataset completo per le statistiche
+    if len(X.shape) > 2:  # Se è un dataset sequenziale
+        X_reshaped = X.reshape(-1, X.shape[-1])
+    else:
+        X_reshaped = X
+    
+    y_pred_proba = best_model.predict(X_reshaped, verbose=0)
+    y_pred = np.argmax(y_pred_proba, axis=1)
+    
+    # Ottieni i nomi delle classi dal preprocessing
+    try:
+        from preprocessing.process import DC
+        target_map_path = os.path.join(os.path.dirname(train_config['output_path']), 'target_anonymization_map.json')
+        if os.path.exists(target_map_path):
+            with open(target_map_path, 'r') as f:
+                target_map = json.load(f)
+            class_names = list(target_map['inverse_map'].values())
+        else:
+            class_names = [f"Class_{i}" for i in range(len(np.unique(y)))]
+    except:
+        class_names = [f"Class_{i}" for i in range(len(np.unique(y)))]
+    
+    # Genera report completo
+    stats_output_path = os.path.join(train_config['output_path'], 'statistics')
+    report_data = generate_comprehensive_report(
+        X=X_reshaped, y=y, y_pred=y_pred, class_names=class_names,
+        training_log=training_log, best_model_path=best_model_path,
+        output_path=stats_output_path, config=train_config
+    )
+    
+    # Stampa riepilogo nella console
+    print_summary_to_console(report_data)
+    
     return training_log, best_model_path

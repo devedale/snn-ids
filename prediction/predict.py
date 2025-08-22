@@ -105,16 +105,18 @@ def predict_on_window(data_window, model_path=None):
 if __name__ == '__main__':
     # Creiamo una finestra di dati fittizia per il test con le nuove feature
     window_size = PREPROCESSING_CONFIG.get('window_size', 10)
-    sample_window = [
-        {
-            'Src IP': '10.42.0.1', 'Dst IP': '10.42.0.2', 'Src Port': 12345, 'Dst Port': 80, 'Protocol': 6,
-            'Flow Duration': 100, 'Total Fwd Packet': 2, 'Total Bwd packets': 2, 'Total Length of Fwd Packet': 100,
-            'Total Length of Bwd Packet': 100, 'Flow Bytes/s': 2000, 'Flow Packets/s': 40, 'Flow IAT Mean': 25.0,
-            'Flow IAT Std': 10.0, 'Flow IAT Max': 50, 'Flow IAT Min': 10, 'Fwd IAT Mean': 50.0, 'Bwd IAT Mean': 50.0,
-            'Fwd Header Length': 40, 'Bwd Header Length': 40, 'Average Packet Size': 50.0, 'Fwd Segment Size Avg': 50.0,
-            'Bwd Segment Size Avg': 50.0
-        } for _ in range(window_size)
-    ]
+    #sample_window = [
+    #    {
+    #        'Src IP': '10.42.0.1', 'Dst IP': '10.42.0.2', 'Src Port': 12345, 'Dst Port': 80, 'Protocol': 6,
+    #        'Flow Duration': 100, 'Total Fwd Packet': 2, 'Total Bwd packets': 2, 'Total Length of Fwd Packet': 100,
+    #        'Total Length of Bwd Packet': 100, 'Flow Bytes/s': 2000, 'Flow Packets/s': 40, 'Flow IAT Mean': 25.0,
+    #        'Flow IAT Std': 10.0, 'Flow IAT Max': 50, 'Flow IAT Min': 10, 'Fwd IAT Mean': 50.0, 'Bwd IAT Mean': 50.0,
+    #        'Fwd Header Length': 40, 'Bwd Header Length': 40, 'Average Packet Size': 50.0, 'Fwd Segment Size Avg': 50.0,
+    #        'Bwd Segment Size Avg': 50.0
+    #    } for _ in range(window_size)
+    #]
+
+    sample_window = [{'Src IP': '10.42.0.1', 'Dst IP': '10.42.0.2', 'Src Port': 12345, 'Dst Port': 80, 'Protocol': 6, 'Total Fwd Packet': 2, 'Total Bwd packets': 2}for _ in range(window_size)]
 
     prediction = predict_on_window(sample_window)
     if prediction:

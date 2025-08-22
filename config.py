@@ -43,7 +43,7 @@ DATA_CONFIG = {
     #            which is common for large, time-split datasets.
     # Assumption: All .csv files within this directory are part of the dataset
     #             and share a compatible schema.
-    "dataset_path": "data/cicids",
+    "dataset_path": "data/2018/CSECICIDS2018_improved",
 
     # --- Column Semantic Mapping ---
     # Rationale: Explicitly defines the roles of key columns. This avoids

@@ -159,10 +159,13 @@ def train_and_evaluate(X=None, y=None, config_override=None):
     best_model = tf.keras.models.load_model(best_model_path)
     
     # Genera predizioni sul dataset completo per le statistiche
-    if len(X.shape) > 2:  # Se è un dataset sequenziale
-        X_reshaped = X.reshape(-1, X.shape[-1])
-    else:
+    # Mantieni la forma 3D per i modelli sequenziali
+    if len(X.shape) == 3:
+        # Per modelli sequenziali (LSTM/GRU), mantieni la forma (samples, timesteps, features)
         X_reshaped = X
+    else:
+        # Per modelli densi, ridimensiona in 2D
+        X_reshaped = X.reshape(-1, X.shape[-1])
     
     y_pred_proba = best_model.predict(X_reshaped, verbose=0)
     y_pred = np.argmax(y_pred_proba, axis=1)

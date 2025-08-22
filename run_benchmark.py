@@ -25,52 +25,66 @@ from preprocessing.temporal_windows import benchmark_temporal_resolutions
 
 def load_sample_data(sample_size: int = None) -> pd.DataFrame:
     """
-    Carica dati di esempio per il benchmark.
+    Carica dati di esempio per il benchmark usando il sistema di preprocessing bilanciato.
     
     Args:
         sample_size: Numero di campioni da caricare (None per tutti)
     
     Returns:
-        DataFrame con i dati
+        DataFrame con i dati bilanciati
     """
-    print("Caricamento dati per il benchmark...")
+    print("Caricamento dati per il benchmark con bilanciamento automatico...")
     
-    # Cerca file CSV nella directory data
-    data_dir = "data/cicids"
-    if not os.path.exists(data_dir):
-        print(f"Directory dati non trovata: {data_dir}")
-        print("Creazione dataset di esempio...")
+    try:
+        # Usa il nostro sistema di preprocessing con bilanciamento
+        from preprocessing.process import load_data_from_directory
         
-        # Crea dataset di esempio per test
-        return create_sample_dataset(sample_size or 10000)
-    
-    # Carica dati reali
-    csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
-    if not csv_files:
-        print(f"Nessun file CSV trovato in {data_dir}")
-        return create_sample_dataset(sample_size or 10000)
-    
-    # Carica il primo file CSV
-    first_file = os.path.join(data_dir, csv_files[0])
-    print(f"Caricamento da: {first_file}")
-    
-    if sample_size:
-        df = pd.read_csv(first_file, nrows=sample_size)
-        print(f"Caricati {len(df)} campioni (modalità sample)")
-    else:
-        df = pd.read_csv(first_file)
-        print(f"Caricati {len(df)} campioni (dataset completo)")
-    
-    # Assicura che la colonna timestamp esista
-    if 'Timestamp' not in df.columns:
-        print("Colonna 'Timestamp' non trovata, creazione timestamp simulato...")
-        df['Timestamp'] = pd.date_range(
-            start='2024-01-01 00:00:00', 
-            periods=len(df), 
-            freq='1S'
+        # Configurazione per il benchmark
+        config = {
+            "balance_strategy": "security",
+            "max_samples_per_class": sample_size or 100000,
+            "benign_ratio": 0.5,
+            "min_samples_per_class": 100
+        }
+        
+        # Carica dati con bilanciamento
+        df = load_data_from_directory(
+            path="data/cicids/2018",
+            sample_size=sample_size,
+            **config
         )
-    
-    return df
+        
+        if df.empty:
+            print("⚠️ Nessun dato caricato, creazione dataset di esempio...")
+            return create_sample_dataset(sample_size or 10000)
+        
+        print(f"✅ Dataset bilanciato caricato: {len(df)} campioni")
+        
+        # Verifica distribuzione delle classi
+        if 'Label' in df.columns:
+            label_counts = df['Label'].value_counts()
+            print(f"📊 Distribuzione classi:")
+            for label, count in label_counts.head(5).items():
+                percentage = (count / len(df)) * 100
+                print(f"  {label}: {count:,} ({percentage:.1f}%)")
+            if len(label_counts) > 5:
+                print(f"  ... e {len(label_counts) - 5} altre classi")
+        
+        # Assicura che la colonna timestamp esista
+        if 'Timestamp' not in df.columns:
+            print("Colonna 'Timestamp' non trovata, creazione timestamp simulato...")
+            df['Timestamp'] = pd.date_range(
+                start='2024-01-01 00:00:00', 
+                periods=len(df), 
+                freq='1S'
+            )
+        
+        return df
+        
+    except Exception as e:
+        print(f"❌ Errore nel caricamento con bilanciamento: {e}")
+        print("🔄 Fallback al dataset di esempio...")
+        return create_sample_dataset(sample_size or 10000)
 
 def create_sample_dataset(n_samples: int = 10000) -> pd.DataFrame:
     """

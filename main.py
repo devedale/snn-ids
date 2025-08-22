@@ -23,10 +23,13 @@ from training.train import train_and_evaluate
 
 print("Libraries imported and custom modules reloaded successfully.")
 
-# Define a configuration for a quick smoke test
+# Define a configuration for a quick smoke test with automatic balancing
 smoke_test_config = {
     "PREPROCESSING_CONFIG": {
-        "sample_size": None
+        "sample_size": None,
+        "balance_strategy": "security",  # Applica sempre il bilanciamento 50% BENIGN / 50% MALICIOUS
+        "max_samples_per_class": 100000,
+        "benign_ratio": 0.5
     }
 }
 

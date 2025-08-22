@@ -191,6 +191,9 @@ class CryptoPanComparisonBenchmark:
             print(f"  Esempio prima finestra: {X_processed[0].shape if len(X_processed) > 0 else 'N/A'}")
             print(f"  Etichette uniche: {np.unique(y_processed)}")
             print(f"  Distribuzione etichette: {np.bincount(y_processed)}")
+            print(f"  Numero di classi: {len(np.unique(y_processed))}")
+            if len(np.unique(y_processed)) == 1:
+                print("  ⚠️  Attenzione: Dataset con una sola classe - il modello non può imparare pattern discriminativi")
             
             # Training e valutazione
             print("  Training modello...")
@@ -269,20 +272,20 @@ class CryptoPanComparisonBenchmark:
                 'time_resolution': time_resolution,
                 'use_cryptopan': use_cryptopan,
                 'timestamp': self.timestamp,
-                'training_time': training_time,
+                'training_time': float(training_time),  # Converti in float per JSON
                 'dataset_stats': {
-                    'total_windows': len(windowed_df.groupby(['window_start', 'window_end'])),
-                    'total_records': len(windowed_df),
-                    'features_shape': X_processed.shape,
-                    'labels_shape': y_processed.shape
+                    'total_windows': int(len(windowed_df.groupby(['window_start', 'window_end']))),
+                    'total_records': int(len(windowed_df)),
+                    'features_shape': [int(x) for x in X_processed.shape],  # Converti tuple in lista di int
+                    'labels_shape': [int(x) for x in y_processed.shape]
                 },
                 'model_performance': {
-                    'best_accuracy': max([run['accuracy'] for run in training_log]),
-                    'training_runs': len(training_log),
-                    'best_model_path': best_model_path
+                    'best_accuracy': float(max([run['accuracy'] for run in training_log])),
+                    'training_runs': int(len(training_log)),
+                    'best_model_path': str(best_model_path)
                 },
                 'evaluation_metrics': report_data['classification_metrics']['overall_metrics'],
-                'statistics_path': stats_output_path
+                'statistics_path': str(stats_output_path)
             }
             
             print(f"  Test completato in {training_time:.2f} secondi")

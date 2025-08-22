@@ -61,6 +61,12 @@ DATA_CONFIG = {
     #              a curated list provides more control and avoids including
     #              irrelevant or noisy features.
     "feature_columns": [
+        # Colonne IP (verranno convertite in ottetti)
+        "Src IP", "Dst IP",
+        # Colonne IP ottetti (generate automaticamente)
+        "Src IP_Octet_1", "Src IP_Octet_2", "Src IP_Octet_3", "Src IP_Octet_4",
+        "Dst IP_Octet_1", "Dst IP_Octet_2", "Dst IP_Octet_3", "Dst IP_Octet_4",
+        # Altre features numeriche
         "Src Port", "Dst Port", "Protocol", "Flow Duration", "Total Fwd Packet",
         "Total Bwd packets", "Total Length of Fwd Packet", "Total Length of Bwd Packet",
         "Flow Bytes/s", "Flow Packets/s", "Flow IAT Mean", "Flow IAT Std",
@@ -155,4 +161,27 @@ PREDICTION_CONFIG = {
     "target_anonymization_map_path": os.path.join(TRAINING_CONFIG["output_path"], "target_anonymization_map.json"),
     "ip_anonymization_map_path": os.path.join(TRAINING_CONFIG["output_path"], "ip_anonymization_map.json"),
     "column_order_path": os.path.join(TRAINING_CONFIG["output_path"], "column_order.json")
+}
+
+# ==============================================================================
+# SECTION 5: BENCHMARK CONFIGURATION
+# ==============================================================================
+#
+# Purpose: Configura il sistema di benchmark per test e comparazioni.
+#
+BENCHMARK_CONFIG = {
+    # --- Output Configuration ---
+    "output_base_dir": "benchmark_results",
+    "save_intermediate_results": True,
+    "generate_comparison_plots": True,
+    
+    # --- Test Configurations ---
+    "min_window_size": 5,
+    "default_resolutions": ['1s', '5s', '10s', '1m', '5m'],
+    
+    # --- Evaluation Metrics ---
+    "cybersecurity_focused": True,
+    "generate_roc_curves": True,
+    "generate_confusion_matrices": True,
+    "detailed_attack_analysis": True
 }

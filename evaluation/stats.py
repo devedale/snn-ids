@@ -18,6 +18,21 @@ from sklearn.preprocessing import label_binarize
 import tensorflow as tf
 from datetime import datetime
 
+def convert_numpy_types(obj):
+    """Converte tipi numpy in tipi Python nativi per serializzazione JSON."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
 def generate_confusion_matrix(y_true, y_pred, class_names, output_path, save_plot=True):
     """
     Genera e salva la matrice di confusione.
@@ -42,26 +57,170 @@ def generate_confusion_matrix(y_true, y_pred, class_names, output_path, save_plo
     
     cm_path = os.path.join(output_path, "confusion_matrix.json")
     with open(cm_path, 'w') as f:
-        json.dump(cm_data, f, indent=4)
+        json.dump(convert_numpy_types(cm_data), f, indent=4)
     
     print(f"Matrice di confusione salvata in: {cm_path}")
     
     # Genera plot se richiesto
     if save_plot:
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(12, 10))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                    xticklabels=class_names, yticklabels=class_names)
-        plt.title('Matrice di Confusione')
+        plt.title('Matrice di Confusione - Tutte le Classi')
         plt.ylabel('Etichetta Vera')
         plt.xlabel('Etichetta Predetta')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
         plt.tight_layout()
         
         plot_path = os.path.join(output_path, "confusion_matrix.png")
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Plot matrice di confusione salvato in: {plot_path}")
+        
+        # Genera confusion matrix individuali per ogni classe
+        generate_individual_class_confusion_matrices(y_true, y_pred, class_names, output_path)
     
     return cm_data
+
+def generate_individual_class_confusion_matrices(y_true, y_pred, class_names, output_path):
+    """
+    Genera confusion matrix individuali per ogni classe (one-vs-all).
+    
+    Args:
+        y_true: Etichette vere
+        y_pred: Predizioni del modello
+        class_names: Nomi delle classi
+        output_path: Percorso per salvare i risultati
+    """
+    print("Generazione confusion matrix individuali per classe...")
+    
+    # Crea directory per le confusion matrix individuali
+    individual_cm_dir = os.path.join(output_path, "individual_confusion_matrices")
+    os.makedirs(individual_cm_dir, exist_ok=True)
+    
+    for i, class_name in enumerate(class_names):
+        # Crea etichette binarie per la classe corrente (one-vs-all)
+        y_true_binary = (y_true == i).astype(int)
+        y_pred_binary = (y_pred == i).astype(int)
+        
+        # Calcola matrice di confusione binaria
+        cm_binary = confusion_matrix(y_true_binary, y_pred_binary, labels=[0, 1])
+        
+        # Calcola metriche per questa classe
+        tn, fp, fn, tp = cm_binary.ravel()
+        
+        # Calcola metriche
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+        
+        # Salva dati della confusion matrix
+        cm_data = {
+            "class_name": class_name,
+            "confusion_matrix": cm_binary.tolist(),
+            "metrics": {
+                "true_negatives": int(tn),
+                "false_positives": int(fp),
+                "false_negatives": int(fn),
+                "true_positives": int(tp),
+                "precision": float(precision),
+                "recall": float(recall),
+                "f1_score": float(f1),
+                "accuracy": float(accuracy)
+            }
+        }
+        
+        # Salva JSON
+        cm_path = os.path.join(individual_cm_dir, f"confusion_matrix_{class_name.replace(' ', '_').replace('-', '_')}.json")
+        with open(cm_path, 'w') as f:
+            json.dump(convert_numpy_types(cm_data), f, indent=4)
+        
+        # Genera plot
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Blues', 
+                   xticklabels=['Non ' + class_name, class_name], 
+                   yticklabels=['Non ' + class_name, class_name])
+        plt.title(f'Confusion Matrix: {class_name} vs Tutte le Altre')
+        plt.ylabel('Etichetta Vera')
+        plt.xlabel('Etichetta Predetta')
+        plt.tight_layout()
+        
+        plot_path = os.path.join(individual_cm_dir, f"confusion_matrix_{class_name.replace(' ', '_').replace('-', '_')}.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    print(f"Confusion matrix individuali salvate in: {individual_cm_dir}")
+    
+    # Genera anche grafico di accuratezza per classe
+    generate_class_accuracy_chart(y_true, y_pred, class_names, output_path)
+
+def generate_class_accuracy_chart(y_true, y_pred, class_names, output_path):
+    """
+    Genera un grafico che mostra l'accuratezza per ogni classe.
+    
+    Args:
+        y_true: Etichette vere
+        y_pred: Predizioni del modello
+        class_names: Nomi delle classi
+        output_path: Percorso per salvare i risultati
+    """
+    print("Generazione grafico accuratezza per classe...")
+    
+    # Calcola accuratezza per ogni classe
+    class_accuracies = []
+    class_supports = []
+    
+    for i, class_name in enumerate(class_names):
+        class_mask = (y_true == i)
+        if np.sum(class_mask) > 0:
+            class_acc = accuracy_score(y_true[class_mask], y_pred[class_mask])
+            class_accuracies.append(class_acc)
+            class_supports.append(np.sum(class_mask))
+        else:
+            class_accuracies.append(0.0)
+            class_supports.append(0)
+    
+    # Crea grafico
+    plt.figure(figsize=(14, 8))
+    
+    # Grafico a barre per accuratezza
+    bars = plt.bar(range(len(class_names)), class_accuracies, alpha=0.7, color='skyblue')
+    
+    # Aggiungi etichette con valori
+    for i, (bar, acc, support) in enumerate(zip(bars, class_accuracies, class_supports)):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{acc:.3f}\n({support})', ha='center', va='bottom', fontsize=9)
+    
+    plt.xlabel('Classi')
+    plt.ylabel('Accuratezza')
+    plt.title('Accuratezza per Classe')
+    plt.xticks(range(len(class_names)), class_names, rotation=45, ha='right')
+    plt.ylim(0, 1.1)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    
+    # Salva grafico
+    plot_path = os.path.join(output_path, "class_accuracy_chart.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Grafico accuratezza per classe salvato in: {plot_path}")
+    
+    # Salva anche i dati numerici
+    accuracy_data = {
+        "class_names": class_names,
+        "accuracies": [float(acc) for acc in class_accuracies],
+        "supports": [int(sup) for sup in class_supports]
+    }
+    
+    accuracy_path = os.path.join(output_path, "class_accuracy_data.json")
+    with open(accuracy_path, 'w') as f:
+        json.dump(accuracy_data, f, indent=4)
+    
+    print(f"Dati accuratezza per classe salvati in: {accuracy_path}")
 
 def generate_classification_metrics(y_true, y_pred, class_names, output_path):
     """
@@ -115,7 +274,7 @@ def generate_classification_metrics(y_true, y_pred, class_names, output_path):
     # Salva metriche
     metrics_path = os.path.join(output_path, "classification_metrics.json")
     with open(metrics_path, 'w') as f:
-        json.dump(metrics_data, f, indent=4)
+        json.dump(convert_numpy_types(metrics_data), f, indent=4)
     
     print(f"Metriche di classificazione salvate in: {metrics_path}")
     return metrics_data
@@ -178,7 +337,7 @@ def generate_dataset_statistics(X, y, class_names, output_path):
     # Salva statistiche
     stats_path = os.path.join(output_path, "dataset_statistics.json")
     with open(stats_path, 'w') as f:
-        json.dump(dataset_stats, f, indent=4)
+        json.dump(convert_numpy_types(dataset_stats), f, indent=4)
     
     print(f"Statistiche del dataset salvate in: {stats_path}")
     return dataset_stats
@@ -221,7 +380,7 @@ def generate_training_summary(training_log, best_model_path, output_path):
     # Salva riepilogo
     summary_path = os.path.join(output_path, "training_summary.json")
     with open(summary_path, 'w') as f:
-        json.dump(training_summary, f, indent=4)
+        json.dump(convert_numpy_types(training_summary), f, indent=4)
     
     print(f"Riepilogo del training salvato in: {summary_path}")
     return training_summary
@@ -268,7 +427,7 @@ def generate_comprehensive_report(X, y, y_pred, class_names, training_log,
     # Salva report principale
     main_report_path = os.path.join(output_path, "comprehensive_report.json")
     with open(main_report_path, 'w') as f:
-        json.dump(main_report, f, indent=4)
+        json.dump(convert_numpy_types(main_report), f, indent=4)
     
     print(f"\nReport completo salvato in: {main_report_path}")
     print("=== Generazione Report Completata ===")

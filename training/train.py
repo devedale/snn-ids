@@ -1,197 +1,268 @@
 # -*- coding: utf-8 -*-
-
 """
-Modulo per il Training Avanzato del Modello.
-Refattorizzato per accettare override della configurazione.
+Training Unificato SNN-IDS
+Sistema semplice per training modelli GRU/LSTM/Dense con validazione.
 """
 
 import os
-import itertools
-import json
+import sys
 import numpy as np
 import tensorflow as tf
-from sklearn.model_selection import train_test_split, KFold
-from copy import deepcopy
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+import json
+from typing import Tuple, Dict, Any, Optional
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Import config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import TRAINING_CONFIG
 
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import TRAINING_CONFIG as TC
-from preprocessing.process import preprocess_data
-from evaluation.stats import generate_comprehensive_report, print_summary_to_console
-
-def build_model(model_type, input_shape, num_classes, params):
-    """Costruisce un modello Keras in base al tipo specificato."""
-    print(f"Costruzione del modello di tipo: {model_type}")
-    print(f"Input shape ricevuto: {input_shape}")
-    print(f"Tipo input_shape: {type(input_shape)}")
-    print(f"Lunghezza input_shape: {len(input_shape) if hasattr(input_shape, '__len__') else 'N/A'}")
-
-    units = params.get('lstm_units', params.get('gru_units', 64))
-
-    if model_type == 'lstm':
-        model = tf.keras.models.Sequential([
+def build_model(model_type: str, input_shape: tuple, num_classes: int, params: Dict) -> tf.keras.Model:
+    """
+    Costruisce un modello Keras.
+    
+    Args:
+        model_type: Tipo di modello ('gru', 'lstm', 'dense')
+        input_shape: Forma dell'input
+        num_classes: Numero di classi
+        params: Parametri del modello
+        
+    Returns:
+        Modello Keras compilato
+    """
+    print(f"🏗️ Costruzione modello {model_type}")
+    print(f"📊 Input shape: {input_shape}")
+    print(f"🏷️ Classi: {num_classes}")
+    
+    units = params.get('gru_units', params.get('lstm_units', 64))
+    activation = params.get('activation', 'relu')
+    learning_rate = params.get('learning_rate', 0.001)
+    
+    if model_type == 'gru':
+        model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.LSTM(units=units, activation=params['activation']),
+            tf.keras.layers.GRU(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units=units // 2, activation=params['activation']),
-            tf.keras.layers.Dense(num_classes, activation='softmax')
+            tf.keras.layers.Dense(units // 2, activation=activation),
+            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
-    elif model_type == 'gru':
-        model = tf.keras.models.Sequential([
+    elif model_type == 'lstm':
+        model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.GRU(units=units, activation=params['activation']),
+            tf.keras.layers.LSTM(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units=units // 2, activation=params['activation']),
-            tf.keras.layers.Dense(num_classes, activation='softmax')
+            tf.keras.layers.Dense(units // 2, activation=activation),
+            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     elif model_type == 'dense':
-        model = tf.keras.models.Sequential([
+        model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=input_shape),
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation=params['activation']),
+            tf.keras.layers.Dense(128, activation=activation),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(64, activation=params['activation']),
-            tf.keras.layers.Dense(num_classes, activation='softmax')
+            tf.keras.layers.Dense(64, activation=activation),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
-
-    optimizer = tf.keras.optimizers.Adam(learning_rate=params['learning_rate'])
     
-    # Gestisci il caso di una sola classe
-    if num_classes == 1:
-        # Per una sola classe, usa binary crossentropy e sigmoid
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(64, activation=params['activation']),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(1, activation='sigmoid')
-        ])
-        model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=['accuracy'])
-    else:
-        # Per multiple classi, usa sparse categorical crossentropy
-        model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    # Compilazione
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
+    model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     
+    print(f"✅ Modello {model_type} creato e compilato")
     return model
 
-def train_and_evaluate(X=None, y=None, config_override=None):
+def train_model(
+    X: np.ndarray, 
+    y: np.ndarray, 
+    model_type: str = None,
+    validation_strategy: str = None,
+    hyperparams: Dict = None
+) -> Tuple[tf.keras.Model, Dict, str]:
     """
-    Orchestra il processo di training e valutazione.
+    Addestra un modello con validazione.
+    
+    Args:
+        X: Features
+        y: Target
+        model_type: Tipo di modello (default da config)
+        validation_strategy: Strategia validazione (default da config)
+        hyperparams: Iperparametri (default da config)
+        
+    Returns:
+        Modello migliore, log training, path modello salvato
     """
-    train_config = deepcopy(TC)
-    if config_override:
-        train_config.update(config_override.get("TRAINING_CONFIG", {}))
-
-    print(f"--- Avvio Training (Strategia: {train_config['validation_strategy']}) ---")
-
-    if X is None or y is None:
-        X, y = preprocess_data(config_override)
-        if X is None:
-            print("Training interrotto a causa di errori nel preprocessing.")
-            return None, None
-
-    hyperparams = train_config['hyperparameters']
-    param_combinations = [dict(zip(hyperparams.keys(), v)) for v in itertools.product(*hyperparams.values())]
-
+    # Usa valori di default
+    model_type = model_type or TRAINING_CONFIG["model_type"]
+    validation_strategy = validation_strategy or TRAINING_CONFIG["validation_strategy"]
+    hyperparams = hyperparams or TRAINING_CONFIG["hyperparameters"]
+    
+    print("🚀 Avvio training")
+    print(f"🏗️ Modello: {model_type}")
+    print(f"📊 Strategia: {validation_strategy}")
+    print(f"📊 Dataset: {X.shape}")
+    
+    # Prepara hyperparameters per grid search
+    param_combinations = _create_param_combinations(hyperparams)
+    print(f"🔍 Configurazioni da testare: {len(param_combinations)}")
+    
+    # Training e validazione
     best_accuracy = 0
-    best_model_path = ""
+    best_model = None
     training_log = []
-
+    
     for i, params in enumerate(param_combinations):
-        print(f"\n--- Inizio Grid Search: Combinazione {i+1}/{len(param_combinations)} ---")
+        print(f"\n--- Configurazione {i+1}/{len(param_combinations)} ---")
         print(f"Parametri: {params}")
-
-        model_type = train_config['model_type']
-
-        if train_config['validation_strategy'] == 'k_fold':
-            kf = KFold(n_splits=train_config['k_fold_splits'], shuffle=True, random_state=42)
-            fold_accuracies = []
-            for fold, (train_index, val_index) in enumerate(kf.split(X, y)):
-                print(f"-- Fold {fold+1}/{train_config['k_fold_splits']} --")
-                X_train, X_val = X[train_index], X[val_index]
-                y_train, y_val = y[train_index], y[val_index]
-                model = build_model(model_type, X_train.shape[1:], len(np.unique(y)), params)
-                model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
-                _, accuracy = model.evaluate(X_val, y_val, verbose=0)
-                fold_accuracies.append(accuracy)
-            avg_accuracy = np.mean(fold_accuracies)
-            print(f"Accuratezza media K-Fold: {avg_accuracy:.4f}")
-            current_run_accuracy = avg_accuracy
-
-        elif train_config['validation_strategy'] == 'train_test_split':
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=train_config.get("test_size", 0.2), random_state=42, stratify=y)
-            model = build_model(model_type, X_train.shape[1:], len(np.unique(y)), params)
-            model.fit(X_train, y_train, epochs=params['epochs'], batch_size=params['batch_size'], validation_data=(X_test, y_test), verbose=1)
-            _, accuracy = model.evaluate(X_test, y_test, verbose=0)
-            print(f"Accuratezza Test Set: {accuracy:.4f}")
-            current_run_accuracy = accuracy
-        else:
-            raise ValueError(f"Strategia di validazione non supportata: {train_config['validation_strategy']}")
-
-        training_log.append({'params': params, 'accuracy': current_run_accuracy})
-
-        if current_run_accuracy > best_accuracy:
-            best_accuracy = current_run_accuracy
-            output_path = train_config['output_path']
-            os.makedirs(output_path, exist_ok=True)
-            best_model_path = os.path.join(output_path, 'best_model.keras')
-            try:
-                model.save(best_model_path, save_format='keras')
-            except:
-                # Fallback per versioni più vecchie di Keras
-                best_model_path = os.path.join(output_path, 'best_model.h5')
-                model.save(best_model_path, save_format='h5')
-            print(f"Nuovo modello migliore trovato con accuratezza {best_accuracy:.4f}. Salvato in: {best_model_path}")
-
-    log_path = os.path.join(train_config['output_path'], 'training_log.json')
-    with open(log_path, 'w') as f:
-        json.dump(training_log, f, indent=4)
-
-    print(f"\nTraining completato. Migliore accuratezza ottenuta: {best_accuracy:.4f}")
+        
+        try:
+            if validation_strategy == "k_fold":
+                accuracy = _train_k_fold(X, y, model_type, params)
+            else:  # train_test_split
+                accuracy = _train_split(X, y, model_type, params)
+            
+            training_log.append({
+                'params': params,
+                'accuracy': float(accuracy),
+                'config_id': i
+            })
+            
+            print(f"✅ Accuratezza: {accuracy:.4f}")
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                # Addestra modello finale con tutti i dati
+                num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
+                input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
+                best_model = build_model(model_type, input_shape, num_classes, params)
+                best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+                
+                print(f"🏆 Nuovo miglior modello: {accuracy:.4f}")
+        
+        except Exception as e:
+            print(f"❌ Errore nella configurazione {i+1}: {e}")
+            training_log.append({
+                'params': params,
+                'accuracy': 0.0,
+                'error': str(e),
+                'config_id': i
+            })
     
-    # Genera statistiche complete e report
-    print("\n--- Generazione Statistiche e Report ---")
+    # Salva modello migliore
+    os.makedirs(TRAINING_CONFIG["output_path"], exist_ok=True)
+    model_path = os.path.join(TRAINING_CONFIG["output_path"], "best_model.keras")
     
-    # Carica il modello migliore per le predizioni
-    best_model = tf.keras.models.load_model(best_model_path)
-    
-    # Genera predizioni sul dataset completo per le statistiche
-    # Mantieni la forma 3D per i modelli sequenziali
-    if len(X.shape) == 3:
-        # Per modelli sequenziali (LSTM/GRU), mantieni la forma (samples, timesteps, features)
-        X_reshaped = X
+    if best_model:
+        best_model.save(model_path)
+        print(f"💾 Modello salvato: {model_path}")
     else:
-        # Per modelli densi, ridimensiona in 2D
-        X_reshaped = X.reshape(-1, X.shape[-1])
+        raise ValueError("Nessun modello valido addestrato!")
     
-    y_pred_proba = best_model.predict(X_reshaped, verbose=0)
-    y_pred = np.argmax(y_pred_proba, axis=1)
+    # Salva log
+    log_path = os.path.join(TRAINING_CONFIG["output_path"], "training_log.json")
+    with open(log_path, 'w') as f:
+        json.dump(training_log, f, indent=2)
     
-    # Ottieni i nomi delle classi dal preprocessing
-    try:
-        from preprocessing.process import DC
-        target_map_path = os.path.join(os.path.dirname(train_config['output_path']), 'target_anonymization_map.json')
-        if os.path.exists(target_map_path):
-            with open(target_map_path, 'r') as f:
-                target_map = json.load(f)
-            class_names = list(target_map['inverse_map'].values())
+    print(f"✅ Training completato!")
+    print(f"🏆 Miglior accuratezza: {best_accuracy:.4f}")
+    
+    return best_model, training_log, model_path
+
+def _create_param_combinations(hyperparams: Dict) -> list:
+    """Crea tutte le combinazioni di iperparametri."""
+    import itertools
+    
+    keys = hyperparams.keys()
+    values = hyperparams.values()
+    combinations = list(itertools.product(*values))
+    
+    return [dict(zip(keys, combo)) for combo in combinations]
+
+def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) -> float:
+    """Training con K-Fold cross validation."""
+    kf = StratifiedKFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
+    accuracies = []
+    
+    for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
+        print(f"  Fold {fold + 1}/{TRAINING_CONFIG['k_fold_splits']}")
+        
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        # Scaling per-fold per evitare leakage
+        is_sequence = len(X_train.shape) == 3
+        if is_sequence:
+            # (samples, timesteps, features) -> scala per features
+            n_features = X_train.shape[2]
+            scaler = StandardScaler()
+            X_train_2d = X_train.reshape(-1, n_features)
+            X_val_2d = X_val.reshape(-1, n_features)
+            scaler.fit(X_train_2d)
+            X_train = scaler.transform(X_train_2d).reshape(X_train.shape)
+            X_val = scaler.transform(X_val_2d).reshape(X_val.shape)
         else:
-            class_names = [f"Class_{i}" for i in range(len(np.unique(y)))]
-    except:
-        class_names = [f"Class_{i}" for i in range(len(np.unique(y)))]
+            scaler = StandardScaler()
+            scaler.fit(X_train)
+            X_train = scaler.transform(X_train)
+            X_val = scaler.transform(X_val)
+
+        # Costruisci e addestra modello (usa tutto y per contare classi)
+        num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
+        input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
+        model = build_model(model_type, input_shape, num_classes, params)
+        
+        model.fit(X_train, y_train, 
+                 epochs=params['epochs'], 
+                 batch_size=params['batch_size'], 
+                 verbose=0)
+        
+        # Valuta
+        _, accuracy = model.evaluate(X_val, y_val, verbose=0)
+        accuracies.append(accuracy)
+        print(f"    Accuracy: {accuracy:.4f}")
     
-    # Genera report completo
-    stats_output_path = os.path.join(train_config['output_path'], 'statistics')
-    report_data = generate_comprehensive_report(
-        X=X_reshaped, y=y, y_pred=y_pred, class_names=class_names,
-        training_log=training_log, best_model_path=best_model_path,
-        output_path=stats_output_path, config=train_config
+    return np.mean(accuracies)
+
+def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) -> float:
+    """Training con train/test split."""
+    test_size = TRAINING_CONFIG["test_size"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
     )
     
-    # Stampa riepilogo nella console
-    print_summary_to_console(report_data)
+    print(f"  Train: {X_train.shape[0]}, Test: {X_test.shape[0]}")
     
-    return training_log, best_model_path
+    # Scaling per split per evitare leakage
+    is_sequence = len(X_train.shape) == 3
+    if is_sequence:
+        n_features = X_train.shape[2]
+        scaler = StandardScaler()
+        X_train_2d = X_train.reshape(-1, n_features)
+        X_test_2d = X_test.reshape(-1, n_features)
+        scaler.fit(X_train_2d)
+        X_train = scaler.transform(X_train_2d).reshape(X_train.shape)
+        X_test = scaler.transform(X_test_2d).reshape(X_test.shape)
+    else:
+        scaler = StandardScaler()
+        scaler.fit(X_train)
+        X_train = scaler.transform(X_train)
+        X_test = scaler.transform(X_test)
+
+    # Costruisci e addestra modello (usa tutto y per contare classi)
+    num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
+    input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
+    model = build_model(model_type, input_shape, num_classes, params)
+    
+    model.fit(X_train, y_train,
+             epochs=params['epochs'],
+             batch_size=params['batch_size'],
+             validation_data=(X_test, y_test),
+             verbose=1)
+    
+    # Valuta
+    _, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    return accuracy

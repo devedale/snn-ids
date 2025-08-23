@@ -212,3 +212,16 @@ stats_output/
 # File di visualizzazione
 viz_output/
 *.viz
+
+
+
+# Cache preprocessing
+preprocessed_cache/
+*.npy
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.pb
+*.onnx
+*.tflite

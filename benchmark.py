@@ -131,6 +131,11 @@ class SNNIDSBenchmark:
         # Configurazione ridotta per test veloce
         smoke_config = {
             'sample_size': 5000,
+            'time_windows': [
+                {'window_size': 30, 'step': 15, 'name': '30s_15s'},
+                {'window_size': 60, 'step': 30, 'name': '1m_30s'},
+                {'window_size': 300, 'step': 150, 'name': '5m_2.5m'},
+            ],
             'model_type': 'dense',  # Più veloce per test
             'hyperparameters': {
                 'epochs': [2],

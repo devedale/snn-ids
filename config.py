@@ -90,7 +90,11 @@ PREPROCESSING_CONFIG = {
     "aggregation_stats": ["sum", "mean", "std", "min", "max"],
     
     # Trasformazione IP in ottetti
-    "convert_ip_to_octets": True
+    "convert_ip_to_octets": True,
+    
+    # Caching preprocessing
+    "cache_enabled": True,
+    "cache_dir": "preprocessed_cache"
 }
 
 # ==============================================================================

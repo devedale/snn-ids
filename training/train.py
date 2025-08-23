@@ -38,6 +38,9 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
     units = params.get('gru_units', params.get('lstm_units', 64))
     activation = params.get('activation', 'relu')
     learning_rate = params.get('learning_rate', 0.001)
+    is_binary = (num_classes == 2)
+    output_units = 1 if is_binary else num_classes
+    output_activation = 'sigmoid' if is_binary else 'softmax'
     
     if model_type == 'gru':
         model = tf.keras.Sequential([
@@ -45,7 +48,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.GRU(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(output_units, activation=output_activation)
         ])
     elif model_type == 'lstm':
         model = tf.keras.Sequential([
@@ -53,7 +56,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.LSTM(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(output_units, activation=output_activation)
         ])
     elif model_type == 'dense':
         # MLP con 4 hidden layers da config
@@ -63,14 +66,14 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
         for units in hidden:
             layers.append(tf.keras.layers.Dense(int(units), activation=activation))
             layers.append(tf.keras.layers.Dropout(dropout))
-        layers.append(tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid'))
+        layers.append(tf.keras.layers.Dense(output_units, activation=output_activation))
         model = tf.keras.Sequential(layers)
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
     
     # Compilazione
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-    loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
+    loss = 'binary_crossentropy' if is_binary else 'sparse_categorical_crossentropy'
     model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     
     print(f"✅ Modello {model_type} creato e compilato")

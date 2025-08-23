@@ -8,6 +8,8 @@ import os
 import sys
 import glob
 import json
+import hashlib
+import pickle
 from datetime import timedelta
 from typing import Tuple, Optional, Dict, Any, List
 
@@ -33,6 +35,57 @@ from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
 def _is_malicious(label: str) -> bool:
     benign = DATA_CONFIG.get("benign_label", "BENIGN")
     return pd.notna(label) and str(label) != str(benign)
+
+
+def _json_hash(data: Dict[str, Any]) -> str:
+    try:
+        payload = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+    except Exception:
+        payload = str(data).encode("utf-8")
+    return hashlib.md5(payload).hexdigest()[:10]
+
+
+def _compute_base_cache_dir(data_path: str, sample_size: int, balance_strategy: str, benign_ratio: float) -> str:
+    cache_root = PREPROCESSING_CONFIG.get("cache_dir", "preprocessed_cache")
+    os.makedirs(cache_root, exist_ok=True)
+    # Firma del dataset: elenco file csv con size e mtime + parametri principali
+    csv_files = sorted(glob.glob(os.path.join(data_path, "*.csv")))
+    files_meta = []
+    for fp in csv_files:
+        try:
+            files_meta.append({
+                "name": os.path.basename(fp),
+                "size": os.path.getsize(fp),
+                "mtime": int(os.path.getmtime(fp))
+            })
+        except Exception:
+            files_meta.append({"name": os.path.basename(fp)})
+    signature = {
+        "files": files_meta,
+        "sample_size": int(sample_size) if sample_size is not None else None,
+        "balance_strategy": balance_strategy,
+        "benign_ratio": float(benign_ratio),
+        "feature_columns": DATA_CONFIG.get("feature_columns", []),
+        "convert_ip_to_octets": PREPROCESSING_CONFIG.get("convert_ip_to_octets", True)
+    }
+    key = _json_hash(signature)
+    return os.path.join(cache_root, f"base_{key}")
+
+
+def _compute_windows_cache_dir(base_dir: str) -> str:
+    params = {
+        "use_time_windows": PREPROCESSING_CONFIG.get("use_time_windows", True),
+        "window_size": PREPROCESSING_CONFIG.get("window_size"),
+        "step": PREPROCESSING_CONFIG.get("step"),
+        "flow_window_strategy": PREPROCESSING_CONFIG.get("flow_window_strategy"),
+        "before": PREPROCESSING_CONFIG.get("window_before_first_malicious_s"),
+        "after": PREPROCESSING_CONFIG.get("window_after_first_malicious_s"),
+        "bin": PREPROCESSING_CONFIG.get("time_bin_seconds"),
+        "output_mode": PREPROCESSING_CONFIG.get("output_mode"),
+        "aggregation_stats": PREPROCESSING_CONFIG.get("aggregation_stats")
+    }
+    key = _json_hash(params)
+    return os.path.join(base_dir, "windows", key)
 
 
 def _ensure_timestamp(df: pd.DataFrame) -> pd.DataFrame:
@@ -74,9 +127,7 @@ def _sessionize_flows(df: pd.DataFrame) -> pd.DataFrame:
     last_ts = None
     timeout = timedelta(seconds=timeout_s)
 
-    for row in df[[flow_col, ts_col]].itertuples(index=False):
-        flow_id = getattr(row, 0)
-        ts = getattr(row, 1)
+    for flow_id, ts in df[[flow_col, ts_col]].itertuples(index=False, name=None):
         if (flow_id != last_flow) or (last_ts is None) or (pd.isna(ts)) or (pd.isna(last_ts)) or (ts - last_ts > timeout):
             current_idx += 1
         session_indices.append(current_idx)
@@ -264,11 +315,12 @@ def load_and_balance_dataset(
     # Pulizia base
     df.columns = df.columns.str.strip()
     df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
-    # Fallback: se manca la colonna target, crea tutto BENIGN
-    if DATA_CONFIG["target_column"] not in df.columns:
-        print("⚠️ Colonna target mancante: creo 'Label' = BENIGN per tutti i record (fallback)")
-        df[DATA_CONFIG["target_column"]] = DATA_CONFIG.get("benign_label", "BENIGN")
     
+    # Verifica colonna target
+    if DATA_CONFIG["target_column"] not in df.columns:
+        missing_cols = [DATA_CONFIG["target_column"]]
+        raise ValueError(f"Colonna target mancante nel dataset: {missing_cols}. Verifica il path dei dati o il formato dei CSV.")
+
     # Bilanciamento
     if balance_strategy == "security" and 'Label' in df.columns:
         df = _balance_cybersecurity(df, sample_size, benign_ratio)
@@ -608,10 +660,54 @@ def preprocess_pipeline(
     print(f"📊 Sample size: {sample_size}")
     print(f"⚖️ Strategia: {balance_strategy}")
     
-    # 1. Carica e bilancia dataset (record-level rapido)
+    # 0. Cache: directory base e windows
+    cache_enabled = bool(PREPROCESSING_CONFIG.get("cache_enabled", False))
     benign_ratio = PREPROCESSING_CONFIG.get("benign_ratio", 0.5)
+    base_cache_dir = _compute_base_cache_dir(data_path, sample_size, balance_strategy, benign_ratio) if cache_enabled else None
+    windows_cache_dir = _compute_windows_cache_dir(base_cache_dir) if cache_enabled else None
+
+    # Prova a caricare X,y dalla cache se disponibili
+    if cache_enabled and windows_cache_dir and os.path.exists(os.path.join(windows_cache_dir, "X.npy")) and os.path.exists(os.path.join(windows_cache_dir, "y.npy")):
+        print(f"🔁 Cache hit: caricamento X,y da {windows_cache_dir}")
+        X = np.load(os.path.join(windows_cache_dir, "X.npy"), allow_pickle=True)
+        y = np.load(os.path.join(windows_cache_dir, "y.npy"), allow_pickle=True)
+        # Label encoder
+        le_path = os.path.join(base_cache_dir, "label_mapping.json") if base_cache_dir else None
+        label_encoder = LabelEncoder()
+        if le_path and os.path.exists(le_path):
+            with open(le_path, 'r') as f:
+                mapping = json.load(f)
+            classes_ = [mapping[str(i)] for i in range(len(mapping))]
+            label_encoder.fit(classes_)
+        else:
+            # fallback
+            label_encoder.fit([DATA_CONFIG.get("benign_label", "BENIGN")])
+        print("✅ Preprocessing completato (from cache)!")
+        print(f"📊 X shape: {X.shape}")
+        print(f"📊 y shape: {y.shape}")
+        if y.size > 0:
+            print(f"🏷️ Classi: {len(np.unique(y))}")
+        return X, y, label_encoder
+
+    # 1. Carica e bilancia dataset (record-level rapido)
     print(f"📊 Benign ratio: {benign_ratio} ({benign_ratio*100:.0f}% BENIGN, {(1-benign_ratio)*100:.0f}% ATTACCHI)")
-    df = load_and_balance_dataset(data_path, sample_size, balance_strategy, benign_ratio)
+    # Se esiste base_df in cache, caricalo
+    if cache_enabled and base_cache_dir and os.path.exists(os.path.join(base_cache_dir, "base_df.pkl")):
+        print(f"🔁 Cache hit base_df: {base_cache_dir}")
+        with open(os.path.join(base_cache_dir, "base_df.pkl"), 'rb') as f:
+            df = pickle.load(f)
+        # Carica anche label mapping
+        label_encoder = LabelEncoder()
+        le_path = os.path.join(base_cache_dir, "label_mapping.json")
+        if os.path.exists(le_path):
+            with open(le_path, 'r') as f:
+                mapping = json.load(f)
+            classes_ = [mapping[str(i)] for i in range(len(mapping))]
+            label_encoder.fit(classes_)
+        else:
+            label_encoder.fit([DATA_CONFIG.get("benign_label", "BENIGN")])
+    else:
+        df = load_and_balance_dataset(data_path, sample_size, balance_strategy, benign_ratio)
     
     # 2. Reassembly + sessionizzazione + filtri rumore
     df = _sessionize_flows(df)
@@ -619,12 +715,27 @@ def preprocess_pipeline(
 
     # 3. Preprocessa features
     df_processed, label_encoder = preprocess_features(df)
+    # Salva base_df in cache
+    if cache_enabled and base_cache_dir:
+        os.makedirs(base_cache_dir, exist_ok=True)
+        with open(os.path.join(base_cache_dir, "base_df.pkl"), 'wb') as f:
+            pickle.dump(df_processed, f)
+        # Salva label mapping se disponibile
+        lm_path = os.path.join(base_cache_dir, "label_mapping.json")
+        if os.path.exists(os.path.join(TRAINING_CONFIG["output_path"], "label_mapping.json")):
+            import shutil
+            shutil.copy(os.path.join(TRAINING_CONFIG["output_path"], "label_mapping.json"), lm_path)
     
     # 4. Bilanciamento a livello di flusso/sessione se configurato
     df_processed = _balance_flows(df_processed)
 
     # 5. Crea finestre temporali / aggregazioni
     X, y = create_time_windows(df_processed)
+    # Salva X,y in cache
+    if cache_enabled and windows_cache_dir:
+        os.makedirs(windows_cache_dir, exist_ok=True)
+        np.save(os.path.join(windows_cache_dir, "X.npy"), X)
+        np.save(os.path.join(windows_cache_dir, "y.npy"), y)
     
     print(f"✅ Preprocessing completato!")
     print(f"📊 X shape: {X.shape}")

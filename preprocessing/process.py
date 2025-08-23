@@ -55,6 +55,12 @@ def _sessionize_flows(df: pd.DataFrame) -> pd.DataFrame:
     """
     flow_col = DATA_CONFIG.get("flow_id_column", "Flow_ID")
     ts_col = DATA_CONFIG["timestamp_column"]
+    # Risolvi nome colonna flow id con fallback comuni
+    if flow_col not in df.columns:
+        for cand in ["Flow_ID", "Flow ID", "FlowID"]:
+            if cand in df.columns:
+                flow_col = cand
+                break
     if flow_col not in df.columns or ts_col not in df.columns:
         return df
 
@@ -93,6 +99,10 @@ def _apply_noise_filter(df: pd.DataFrame) -> pd.DataFrame:
 
     ts_col = DATA_CONFIG["timestamp_column"]
     flow_session_col = "Session_ID"
+    if flow_session_col not in df.columns:
+        return df
+    if ts_col not in df.columns:
+        return df
 
     df = df.copy()
     df = _ensure_timestamp(df)
@@ -236,15 +246,15 @@ def load_and_balance_dataset(
         
         # Debug attacchi trovati (mostra miglioramento)
         if 'Label' in df_file.columns:
-            attacks = len(df_file[df_file['Label'] != 'BENIGN'])
             total_samples = len(df_file)
+            attacks = int((df_file['Label'] != 'BENIGN').sum())
             attack_percentage = (attacks / total_samples * 100) if total_samples > 0 else 0
             if attacks > 0:
                 print(f"    🎯 Trovati {attacks} attacchi su {total_samples} campioni ({attack_percentage:.1f}%)")
                 # Mostra diversità dei tipi di attacco
                 unique_attacks = df_file[df_file['Label'] != 'BENIGN']['Label'].unique()
                 print(f"    🔍 Tipi di attacco: {len(unique_attacks)} diversi ({', '.join(unique_attacks[:3])}{'...' if len(unique_attacks) > 3 else ''})")
-    else:
+            else:
                 print(f"    📊 Solo traffico BENIGN ({total_samples} campioni)")
     
     # Combina tutti i dati
@@ -254,6 +264,10 @@ def load_and_balance_dataset(
     # Pulizia base
     df.columns = df.columns.str.strip()
     df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
+    # Fallback: se manca la colonna target, crea tutto BENIGN
+    if DATA_CONFIG["target_column"] not in df.columns:
+        print("⚠️ Colonna target mancante: creo 'Label' = BENIGN per tutti i record (fallback)")
+        df[DATA_CONFIG["target_column"]] = DATA_CONFIG.get("benign_label", "BENIGN")
     
     # Bilanciamento
     if balance_strategy == "security" and 'Label' in df.columns:
@@ -356,9 +370,11 @@ def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
     
     # 0. Rimuovi Flow_ID se presente (utilizzato solo per sessionizzazione)
     flow_col = DATA_CONFIG.get("flow_id_column", "Flow_ID")
-    if flow_col in df_processed.columns:
-        print(f"🗑️ Rimozione campo {flow_col} (utilizzato solo per sessionizzazione)")
-        df_processed = df_processed.drop(columns=[flow_col])
+    flow_candidates = [flow_col, "Flow_ID", "Flow ID", "FlowID"]
+    to_drop = [c for c in flow_candidates if c in df_processed.columns]
+    if to_drop:
+        print(f"🗑️ Rimozione campi flow id {to_drop} (utilizzati solo per sessionizzazione)")
+        df_processed = df_processed.drop(columns=to_drop)
     
     # 1. Trasforma IP in ottetti
     if PREPROCESSING_CONFIG["convert_ip_to_octets"]:
@@ -428,16 +444,47 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     print("⏱️ Creazione finestre temporali / contesti N/T...")
 
     df = _ensure_timestamp(df)
-    df = _sessionize_flows(df)
-    df = _apply_noise_filter(df)
+    # Sessionizza solo se manca Session_ID
+    if "Session_ID" not in df.columns:
+        df = _sessionize_flows(df)
+    # Se ancora assente, crea un fallback: una sessione per record
+    if "Session_ID" not in df.columns:
+        df = df.copy()
+        df["Session_ID"] = df.index.astype(str)
+        print("⚠️ Session_ID assente nei dati: creato fallback una-sessione-per-record")
+    # Applica noise filter solo se abbiamo sessioni
+    if "Session_ID" in df.columns:
+        df = _apply_noise_filter(df)
 
     ts_col = DATA_CONFIG["timestamp_column"]
     tgt_col = DATA_CONFIG["target_column"]
     session_col = "Session_ID"
+    if session_col not in df.columns:
+        raise KeyError("Session_ID")
     benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
 
     feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
     out_mode = PREPROCESSING_CONFIG.get("output_mode", "sequence")
+
+    # Se manca il timestamp, effettua aggregazione per sessione e ritorna
+    if ts_col not in df.columns:
+        print("⚠️ Timestamp assente nei dati: uso aggregazione per sessione (no finestre)")
+        if not feature_cols:
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            exclude_cols = set(["Label_Encoded", tgt_col, "Session_Index"]) | set(
+                [c for c in df.columns if c.endswith("_Octet_1") or c.endswith("_Octet_2") or c.endswith("_Octet_3") or c.endswith("_Octet_4")]
+            )
+            feature_cols = [c for c in numeric_cols if c not in exclude_cols]
+        X_list = []
+        y_list = []
+        for session_id, g in df.groupby(session_col):
+            agg_row = _aggregate_features(g, feature_cols) if feature_cols else np.zeros(0)
+            X_list.append(agg_row)
+            y_list.append(int(np.mean([_is_malicious(l) for l in g[tgt_col]]) >= 0.5))
+        X = np.vstack(X_list) if X_list else np.zeros((0, len(feature_cols) * len(PREPROCESSING_CONFIG.get("aggregation_stats", []))))
+        y = np.array(y_list, dtype=int)
+        print(f"✅ Aggregazioni per sessione create: X={X.shape}, y={y.shape}")
+        return X, y
 
     strategy = PREPROCESSING_CONFIG.get("flow_window_strategy", "first_malicious_context")
     before_s = PREPROCESSING_CONFIG.get("window_before_first_malicious_s", 30)
@@ -596,6 +643,8 @@ def _balance_flows(df: pd.DataFrame) -> pd.DataFrame:
     method = cfg.get("method", "undersample")
     ratio = float(cfg.get("ratio", 1.0))
     session_col = "Session_ID"
+    if session_col not in df.columns:
+        return df
     tgt_col = DATA_CONFIG["target_column"]
     benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
 

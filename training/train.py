@@ -56,15 +56,15 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     elif model_type == 'dense':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(64, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
-        ])
+        # MLP con 4 hidden layers da config
+        hidden = TRAINING_CONFIG.get('mlp_hidden_layers', [256, 128, 64, 32])
+        dropout = float(TRAINING_CONFIG.get('dropout_rate', 0.2))
+        layers = [tf.keras.layers.Input(shape=input_shape), tf.keras.layers.Flatten()]
+        for units in hidden:
+            layers.append(tf.keras.layers.Dense(int(units), activation=activation))
+            layers.append(tf.keras.layers.Dropout(dropout))
+        layers.append(tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid'))
+        model = tf.keras.Sequential(layers)
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
     
@@ -139,7 +139,16 @@ def train_model(
                 num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
                 input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
                 best_model = build_model(model_type, input_shape, num_classes, params)
-                best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+                callbacks = []
+                if TRAINING_CONFIG.get('log_training_history', True):
+                    callbacks.append(tf.keras.callbacks.History())
+                best_model.fit(
+                    X, y,
+                    epochs=min(params.get('epochs', 10), int(TRAINING_CONFIG.get('max_epochs', 30))),
+                    batch_size=params['batch_size'],
+                    verbose=0,
+                    callbacks=callbacks
+                )
                 
                 print(f"🏆 Nuovo miglior modello: {accuracy:.4f}")
         
@@ -215,10 +224,12 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) -
         input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
         model = build_model(model_type, input_shape, num_classes, params)
         
-        model.fit(X_train, y_train, 
-                 epochs=params['epochs'], 
-                 batch_size=params['batch_size'], 
-                 verbose=0)
+        model.fit(
+            X_train, y_train,
+            epochs=min(params.get('epochs', 10), int(TRAINING_CONFIG.get('max_epochs', 30))),
+            batch_size=params['batch_size'],
+            verbose=0
+        )
         
         # Valuta
         _, accuracy = model.evaluate(X_val, y_val, verbose=0)
@@ -257,12 +268,49 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) ->
     input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
     model = build_model(model_type, input_shape, num_classes, params)
     
-    model.fit(X_train, y_train,
-             epochs=params['epochs'],
-             batch_size=params['batch_size'],
-             validation_data=(X_test, y_test),
-             verbose=1)
+    history = model.fit(
+        X_train, y_train,
+        epochs=min(params.get('epochs', 10), int(TRAINING_CONFIG.get('max_epochs', 30))),
+        batch_size=params['batch_size'],
+        validation_data=(X_test, y_test),
+        verbose=1
+    )
+    # Salva loss per epoca
+    if TRAINING_CONFIG.get('log_training_history', True):
+        os.makedirs(TRAINING_CONFIG['output_path'], exist_ok=True)
+        with open(os.path.join(TRAINING_CONFIG['output_path'], 'training_history.json'), 'w') as f:
+            json.dump({k: [float(x) for x in v] for k, v in history.history.items()}, f, indent=2)
     
     # Valuta
     _, accuracy = model.evaluate(X_test, y_test, verbose=0)
     return accuracy
+
+
+def main():
+    """CLI minimale: carica X.npy e y.npy se presenti e avvia il training."""
+    pre_dir = os.path.join(TRAINING_CONFIG["output_path"], "preprocessed")
+    X_path = os.path.join(pre_dir, "X.npy")
+    y_path = os.path.join(pre_dir, "y.npy")
+    if not (os.path.exists(X_path) and os.path.exists(y_path)):
+        raise FileNotFoundError(f"Dataset non trovato. Esegui prima il preprocessing. Attesi: {X_path}, {y_path}")
+
+    print(f"🔄 Caricamento dataset preprocessato: {pre_dir}")
+    X = np.load(X_path, allow_pickle=False)
+    y = np.load(y_path, allow_pickle=False)
+
+    # Se X è 2D, usa 'dense', altrimenti usa config
+    model_type = TRAINING_CONFIG.get("model_type", "gru")
+    if len(X.shape) == 2:
+        model_type = "dense"
+
+    _, training_log, model_path = train_model(
+        X, y,
+        model_type=model_type,
+        validation_strategy=TRAINING_CONFIG.get("validation_strategy"),
+        hyperparams=TRAINING_CONFIG.get("hyperparameters")
+    )
+    print(f"🏁 Training finito. Modello: {model_path}")
+
+
+if __name__ == "__main__":
+    main()

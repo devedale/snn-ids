@@ -6,3 +6,6 @@ matplotlib>=3.7
 seaborn>=0.12
 tqdm>=4.66
 
+# Bilanciamento avanzato
+imbalanced-learn>=0.12
+

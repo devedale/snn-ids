@@ -15,6 +15,12 @@ DATA_CONFIG = {
     "dataset_path": "data/cicids/2018",
     "timestamp_column": "Timestamp",
     "target_column": "Label",
+    # Identificatore del flusso (necessario per reassembly)
+    "flow_id_column": "Flow_ID",
+    # Valore che identifica il traffico benigno
+    "benign_label": "BENIGN",
+    # Formato timestamp opzionale (se non parsabile automaticamente)
+    "timestamp_format": None,
     
     # Colonne IP da anonimizzare e trasformare in ottetti
     "ip_columns": ["Src IP", "Dst IP"],
@@ -43,15 +49,45 @@ DATA_CONFIG = {
 PREPROCESSING_CONFIG = {
     # Campionamento e bilanciamento
     "sample_size": 100000,
-    "balance_strategy": "security",  # 50% BENIGN, 50% ATTACCHI
+    "balance_strategy": "security",  # legacy bilanciamento record-level
     "benign_ratio": 0.5,
     "max_samples_per_class": 100000,
     "min_samples_per_class": 1000,
+    # Bilanciamento a livello di flusso/sessione
+    "flow_balance": {
+        "enabled": True,
+        "method": "undersample",  # "undersample" | "smote" | "none"
+        "ratio": 1.0  # BENIGN:MALEVOLI = 1.0 -> parità
+    },
     
     # Finestre temporali per modelli sequenziali
     "use_time_windows": True,
     "window_size": 10,
     "step": 5,
+
+    # Strategia finestre per contesto di attacco (N prima, T dopo)
+    "flow_window_strategy": "first_malicious_context",  # "first_malicious_context" | "fixed"
+    "window_before_first_malicious_s": 30,
+    "window_after_first_malicious_s": 30,
+    "time_bin_seconds": 5,  # granularità per sequenze dentro il contesto N/T
+    "session_timeout_seconds": 60,
+
+    # Propagazione/gestione etichette per finestra
+    "label_propagation": {
+        "mode": "majority",  # "any" | "majority" | "probabilistic" | "smoothing"
+        "prob_threshold": 0.5,
+        "smoothing_alpha": 0.6,
+        "noise_filter": {
+            "enabled": True,
+            "method": "temporal_smoothing",  # "majority" | "temporal_smoothing"
+            "window": 3,
+            "threshold": 0.5
+        }
+    },
+
+    # Output per modello
+    "output_mode": "sequence",  # "sequence" | "mlp_aggregated"
+    "aggregation_stats": ["sum", "mean", "std", "min", "max"],
     
     # Trasformazione IP in ottetti
     "convert_ip_to_octets": True
@@ -75,13 +111,23 @@ TRAINING_CONFIG = {
     
     # Hyperparameters
     "hyperparameters": {
-        "epochs": [5],
+        "epochs": [10, 20, 30],
         "batch_size": [64],
         "learning_rate": [0.001],
         "activation": ["relu"],
         "lstm_units": [64],
         "gru_units": [64]
-    }
+    },
+    # Config MLP 4 hidden layers
+    "mlp_hidden_layers": [256, 128, 64, 32],
+    "dropout_rate": 0.2,
+    # Logging
+    "log_training_history": True,
+    "max_epochs": 30,
+    # Esecuzione per-epoca (preprocessing a flussi per epoca)
+    "preprocess_per_epoch": False,
+    "flows_per_epoch": 5000,
+    "epoch_selection_mode": "sequential"  # "sequential" | "parallel"
 }
 
 # ==============================================================================

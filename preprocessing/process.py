@@ -7,16 +7,155 @@ Sistema completo per preprocessare dati CIC-IDS con bilanciamento e finestre tem
 import os
 import sys
 import glob
-import pandas as pd
+import json
+from datetime import timedelta
+from typing import Tuple, Optional, Dict, Any, List
+
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils import resample
-from typing import Tuple, Optional, Dict, Any
-import json
+
+try:
+    from imblearn.over_sampling import SMOTE
+except Exception:
+    SMOTE = None
 
 # Aggiungi path per import
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
+
+
+# ==============================================================================
+# Utility di base
+# ==============================================================================
+
+def _is_malicious(label: str) -> bool:
+    benign = DATA_CONFIG.get("benign_label", "BENIGN")
+    return pd.notna(label) and str(label) != str(benign)
+
+
+def _ensure_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+    ts_col = DATA_CONFIG["timestamp_column"]
+    if ts_col not in df.columns:
+        return df
+    if not np.issubdtype(df[ts_col].dtype, np.datetime64):
+        fmt = DATA_CONFIG.get("timestamp_format")
+        if fmt:
+            df[ts_col] = pd.to_datetime(df[ts_col], format=fmt, errors='coerce')
+        else:
+            df[ts_col] = pd.to_datetime(df[ts_col], errors='coerce')
+    return df
+
+
+def _sessionize_flows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Crea sessioni per ciascun Flow_ID in base al timeout configurabile.
+    Aggiunge la colonna 'Session_Index' e 'Session_ID' (FlowID#idx).
+    """
+    flow_col = DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    ts_col = DATA_CONFIG["timestamp_column"]
+    if flow_col not in df.columns or ts_col not in df.columns:
+        return df
+
+    df = _ensure_timestamp(df)
+    timeout_s = PREPROCESSING_CONFIG.get("session_timeout_seconds", 60)
+    df = df.sort_values([flow_col, ts_col]).reset_index(drop=True)
+
+    session_indices: List[int] = []
+    current_idx = -1
+    last_flow = None
+    last_ts = None
+    timeout = timedelta(seconds=timeout_s)
+
+    for row in df[[flow_col, ts_col]].itertuples(index=False):
+        flow_id = getattr(row, 0)
+        ts = getattr(row, 1)
+        if (flow_id != last_flow) or (last_ts is None) or (pd.isna(ts)) or (pd.isna(last_ts)) or (ts - last_ts > timeout):
+            current_idx += 1
+        session_indices.append(current_idx)
+        last_flow = flow_id
+        last_ts = ts
+
+    df["Session_Index"] = session_indices
+    df["Session_ID"] = df[flow_col].astype(str) + "#" + df["Session_Index"].astype(str)
+    return df
+
+
+def _apply_noise_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applica filtri di rumore sulle etichette a livello temporale per sessione.
+    Supporta majority voting su finestre e temporal smoothing (media mobile).
+    """
+    cfg = PREPROCESSING_CONFIG.get("label_propagation", {}).get("noise_filter", {})
+    if not cfg or not cfg.get("enabled", False):
+        return df
+
+    ts_col = DATA_CONFIG["timestamp_column"]
+    flow_session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+
+    df = df.copy()
+    df = _ensure_timestamp(df)
+    df.sort_values([flow_session_col, ts_col], inplace=True)
+    benign = DATA_CONFIG.get("benign_label", "BENIGN")
+    df["_is_mal"] = df[DATA_CONFIG["target_column"]].apply(_is_malicious).astype(int)
+
+    method = cfg.get("method", "temporal_smoothing")
+    if method == "majority":
+        win = int(cfg.get("window", 3))
+        thr = float(cfg.get("threshold", 0.5))
+        df["_maj"] = (
+            df.groupby(flow_session_col)["_is_mal"].rolling(window=win, min_periods=1).mean().reset_index(level=0, drop=True)
+        )
+        df["_is_mal"] = (df["_maj"] >= thr).astype(int)
+        df.drop(columns=["_maj"], inplace=True)
+    else:  # temporal_smoothing (exponential)
+        alpha = float(PREPROCESSING_CONFIG.get("label_propagation", {}).get("smoothing_alpha", 0.6))
+        smoothed = []
+        for _, g in df.groupby(flow_session_col):
+            s = g["_is_mal"].astype(float)
+            ema = s.ewm(alpha=alpha, adjust=False).mean()
+            smoothed.append(ema)
+        df["_is_mal"] = pd.concat(smoothed).sort_index()
+        df["_is_mal"] = (df["_is_mal"] >= 0.5).astype(int)
+
+    df[DATA_CONFIG["target_column"]] = df[DATA_CONFIG["target_column"]].where(df["_is_mal"] == 0, other="MALICIOUS")
+    df.drop(columns=["_is_mal"], inplace=True)
+    return df
+
+
+# ==============================================================================
+# CLI di preprocessing (solo comandi, per notebook senza python inline)
+# ==============================================================================
+def main():
+    """Esegue l'intera pipeline usando i parametri da config."""
+    data_path = DATA_CONFIG["dataset_path"]
+    X, y, _ = preprocess_pipeline(data_path=data_path)
+    # Salva su disco per consumo da training
+    out_dir = os.path.join(TRAINING_CONFIG["output_path"], "preprocessed")
+    os.makedirs(out_dir, exist_ok=True)
+
+    if bool(TRAINING_CONFIG.get("preprocess_per_epoch", False)) and len(X) > 0:
+        flows_per_epoch = int(TRAINING_CONFIG.get("flows_per_epoch", 5000))
+        total = len(X)
+        n_shards = max(1, (total + flows_per_epoch - 1) // flows_per_epoch)
+        print(f"🔁 Modalità per-epoca attiva: suddivido {total} campioni in {n_shards} shard da ~{flows_per_epoch}")
+        for k in range(n_shards):
+            s = k * flows_per_epoch
+            e = min((k + 1) * flows_per_epoch, total)
+            Xk = X[s:e]
+            yk = y[s:e]
+            np.save(os.path.join(out_dir, f"X_epoch_{k:03d}.npy"), Xk)
+            np.save(os.path.join(out_dir, f"y_epoch_{k:03d}.npy"), yk)
+        print(f"💾 Salvati shard per-epoca in {out_dir}")
+    else:
+        np.save(os.path.join(out_dir, "X.npy"), X)
+        np.save(os.path.join(out_dir, "y.npy"), y)
+        print(f"💾 Salvati X.npy e y.npy in {out_dir}")
+
+
+if __name__ == "__main__":
+    main()
 
 def load_and_balance_dataset(
     data_path: str,
@@ -58,6 +197,7 @@ def load_and_balance_dataset(
             
             # Carica tutto il file
             df_file = pd.read_csv(file_path)
+            df_file = _ensure_timestamp(df_file)
             
             if 'Label' in df_file.columns:
                 # Filtra separatamente (molto più veloce dell'ordinamento)
@@ -91,6 +231,7 @@ def load_and_balance_dataset(
                 df_file = df_file.head(target_per_file)
         else:
             df_file = pd.read_csv(file_path)
+            df_file = _ensure_timestamp(df_file)
         
         all_data.append(df_file)
         
@@ -268,53 +409,126 @@ def _ip_to_octet(ip_str: str, octet_index: int) -> int:
 
 def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Crea finestre temporali per modelli sequenziali.
-    
-    Args:
-        df: DataFrame preprocessato
-        
-    Returns:
-        Arrays X (3D) e y per training
+    Crea finestre temporali per modelli sequenziali oppure aggregati MLP.
+    Supporta strategia "first_malicious_context" con N secondi prima e T dopo
+    il primo evento malevolo nel flusso/sessione, e label propagation configurabile.
     """
+    # Modalità senza finestre temporali: output 2D per MLP basato su record
     if not PREPROCESSING_CONFIG["use_time_windows"]:
-        # Modalità senza finestre temporali
         feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
         X = df[feature_cols].values
         y = df['Label_Encoded'].values if 'Label_Encoded' in df.columns else np.zeros(len(df))
         return X, y
-    
-    print("⏱️ Creazione finestre temporali...")
-    
-    # Ordina per timestamp
-    if DATA_CONFIG["timestamp_column"] in df.columns:
-        df = df.sort_values(DATA_CONFIG["timestamp_column"]).reset_index(drop=True)
-    
-    # Parametri finestre
-    window_size = PREPROCESSING_CONFIG["window_size"]
-    step = PREPROCESSING_CONFIG["step"]
-    
-    # Features e target
+
+    print("⏱️ Creazione finestre temporali / contesti N/T...")
+
+    df = _ensure_timestamp(df)
+    df = _sessionize_flows(df)
+    df = _apply_noise_filter(df)
+
+    ts_col = DATA_CONFIG["timestamp_column"]
+    tgt_col = DATA_CONFIG["target_column"]
+    session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
+
     feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
-    X_windows, y_windows = [], []
-    
-    # Crea finestre scorrevoli
-    for i in range(0, len(df) - window_size + 1, step):
-        window_data = df.iloc[i:i + window_size]
-        
-        # Features della finestra
-        X_window = window_data[feature_cols].values
-        
-        # Etichetta (dell'ultimo elemento della finestra)
-        y_label = window_data['Label_Encoded'].iloc[-1] if 'Label_Encoded' in window_data.columns else 0
-        
-        X_windows.append(X_window)
-        y_windows.append(y_label)
-    
-    X = np.array(X_windows)
-    y = np.array(y_windows)
-    
-    print(f"✅ Finestre create: {X.shape}")
+    out_mode = PREPROCESSING_CONFIG.get("output_mode", "sequence")
+
+    strategy = PREPROCESSING_CONFIG.get("flow_window_strategy", "first_malicious_context")
+    before_s = PREPROCESSING_CONFIG.get("window_before_first_malicious_s", 30)
+    after_s = PREPROCESSING_CONFIG.get("window_after_first_malicious_s", 30)
+    bin_s = PREPROCESSING_CONFIG.get("time_bin_seconds", 5)
+
+    X_list: List[np.ndarray] = []
+    y_list: List[int] = []
+
+    def _label_window(labels: pd.Series) -> int:
+        mode = PREPROCESSING_CONFIG.get("label_propagation", {}).get("mode", "majority")
+        if mode == "any":
+            return int(any(_is_malicious(l) for l in labels))
+        if mode == "probabilistic":
+            thr = float(PREPROCESSING_CONFIG.get("label_propagation", {}).get("prob_threshold", 0.5))
+            p = np.mean([_is_malicious(l) for l in labels])
+            return int(p >= thr)
+        if mode == "smoothing":
+            # smoothing già applicato; usa majority sul risultato filtrato
+            return int(np.mean([_is_malicious(l) for l in labels]) >= 0.5)
+        # default majority
+        return int(np.mean([_is_malicious(l) for l in labels]) >= 0.5)
+
+    for session_id, g in df.groupby(session_col):
+        g = g.sort_values(ts_col)
+        # trova primo evento malevolo
+        mal_idx = np.where(g[tgt_col].apply(_is_malicious).values)[0]
+        if strategy == "first_malicious_context" and len(mal_idx) > 0:
+            first_mal_ts = g.iloc[mal_idx[0]][ts_col]
+            start_ts = first_mal_ts - pd.Timedelta(seconds=before_s)
+            end_ts = first_mal_ts + pd.Timedelta(seconds=after_s)
+            win_df = g[(g[ts_col] >= start_ts) & (g[ts_col] <= end_ts)]
+        else:
+            win_df = g
+
+        if win_df.empty:
+            continue
+
+        # bin temporali per sequenze
+        if out_mode == "sequence":
+            win_df = win_df.copy()
+            base_ts = win_df[ts_col].min()
+            win_df["_bin"] = ((win_df[ts_col] - base_ts).dt.total_seconds() // bin_s).astype(int)
+            bins = []
+            labels = []
+            for b, bg in win_df.groupby("_bin"):
+                agg = _aggregate_features(bg, feature_cols)
+                bins.append(agg)
+                labels.append(bg[tgt_col])
+            X_seq = np.stack(bins, axis=0)
+            y_win = _label_window(pd.concat(labels))
+            X_list.append(X_seq)
+            y_list.append(y_win)
+        else:  # mlp_aggregated
+            agg_row = _aggregate_features(win_df, feature_cols)
+            X_list.append(agg_row)
+            y_list.append(_label_window(win_df[tgt_col]))
+
+    if out_mode == "sequence":
+        # pad/truncate sequenze alla max length per batch training semplice
+        max_len = max(x.shape[0] for x in X_list) if X_list else 0
+        feature_dim = X_list[0].shape[1] if X_list else 0
+        X = np.zeros((len(X_list), max_len, feature_dim), dtype=float)
+        for i, x in enumerate(X_list):
+            L = x.shape[0]
+            X[i, :L, :] = x
+    else:
+        X = np.vstack(X_list) if X_list else np.zeros((0, len(feature_cols) * len(PREPROCESSING_CONFIG.get("aggregation_stats", []))))
+
+    y = np.array(y_list, dtype=int)
+    print(f"✅ Finestre/aggregazioni create: X={X.shape}, y={y.shape}")
     return X, y
+
+
+def _aggregate_features(df_window: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
+    stats = PREPROCESSING_CONFIG.get("aggregation_stats", ["sum", "mean", "std", "min", "max"])
+    agg = {}
+    for col in feature_cols:
+        series = pd.to_numeric(df_window[col], errors='coerce').fillna(0)
+        for st in stats:
+            if st == "sum":
+                agg[(col, "sum")] = float(series.sum())
+            elif st == "mean":
+                agg[(col, "mean")] = float(series.mean())
+            elif st == "std":
+                agg[(col, "std")] = float(series.std(ddof=0))
+            elif st == "min":
+                agg[(col, "min")] = float(series.min())
+            elif st == "max":
+                agg[(col, "max")] = float(series.max())
+    # Restituisce vettore nell'ordine deterministico col->stat
+    ordered = []
+    for col in feature_cols:
+        for st in stats:
+            ordered.append(agg[(col, st)])
+    return np.array(ordered, dtype=float)
 
 def preprocess_pipeline(
     data_path: str = None,
@@ -342,20 +556,69 @@ def preprocess_pipeline(
     print(f"📊 Sample size: {sample_size}")
     print(f"⚖️ Strategia: {balance_strategy}")
     
-    # 1. Carica e bilancia dataset
+    # 1. Carica e bilancia dataset (record-level rapido)
     benign_ratio = PREPROCESSING_CONFIG.get("benign_ratio", 0.5)
     print(f"📊 Benign ratio: {benign_ratio} ({benign_ratio*100:.0f}% BENIGN, {(1-benign_ratio)*100:.0f}% ATTACCHI)")
     df = load_and_balance_dataset(data_path, sample_size, balance_strategy, benign_ratio)
     
-    # 2. Preprocessa features
+    # 2. Reassembly + sessionizzazione + filtri rumore
+    df = _sessionize_flows(df)
+    df = _apply_noise_filter(df)
+
+    # 3. Preprocessa features
     df_processed, label_encoder = preprocess_features(df)
     
-    # 3. Crea finestre temporali
+    # 4. Bilanciamento a livello di flusso/sessione se configurato
+    df_processed = _balance_flows(df_processed)
+
+    # 5. Crea finestre temporali / aggregazioni
     X, y = create_time_windows(df_processed)
     
     print(f"✅ Preprocessing completato!")
     print(f"📊 X shape: {X.shape}")
     print(f"📊 y shape: {y.shape}")
-    print(f"🏷️ Classi: {len(np.unique(y))}")
+    if y.size > 0:
+        print(f"🏷️ Classi: {len(np.unique(y))}")
     
     return X, y, label_encoder
+
+
+def _balance_flows(df: pd.DataFrame) -> pd.DataFrame:
+    cfg = PREPROCESSING_CONFIG.get("flow_balance", {"enabled": False})
+    if not cfg.get("enabled", False):
+        return df
+
+    method = cfg.get("method", "undersample")
+    ratio = float(cfg.get("ratio", 1.0))
+    session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    tgt_col = DATA_CONFIG["target_column"]
+    benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
+
+    # Marca sessioni malevole se qualsiasi record malevolo presente
+    session_labels = df.groupby(session_col)[tgt_col].apply(lambda s: int(any(_is_malicious(x) for x in s)))
+    mal_sessions = set(session_labels[session_labels == 1].index)
+    ben_sessions = set(session_labels[session_labels == 0].index)
+
+    # undersample/oversample a livello di sessione
+    if method == "smote" and SMOTE is not None:
+        # Costruisci rappresentazione aggregata per sessione per SMOTE
+        feature_cols = [c for c in DATA_CONFIG["feature_columns"] if c in df.columns]
+        sess_agg = df.groupby(session_col).apply(lambda g: pd.Series(_aggregate_features(g, feature_cols)))
+        y_sess = session_labels.loc[sess_agg.index].values
+        sm = SMOTE()
+        X_res, y_res = sm.fit_resample(sess_agg.values, y_sess)
+        # Seleziona sessioni risultanti (approssimazione: usa indice originale per quelle presenti)
+        # In alternativa, costruire un nuovo dataset sintetico è complesso; manteniamo subset bilanciato originale
+        target_pos = int(sum(y_res))
+        target_neg = int(len(y_res) - target_pos)
+        pos_ids = list(mal_sessions)
+        neg_ids = list(ben_sessions)[:target_neg]
+        keep_sessions = set(pos_ids) | set(neg_ids)
+        return df[df[session_col].isin(keep_sessions)]
+    else:
+        # undersample benigno per pareggiare malevoli
+        n_mal = len(mal_sessions)
+        n_ben_keep = int(n_mal * ratio)
+        ben_keep = set(list(ben_sessions)[:n_ben_keep])
+        keep_sessions = set(mal_sessions) | ben_keep
+        return df[df[session_col].isin(keep_sessions)]

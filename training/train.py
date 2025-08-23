@@ -188,8 +188,15 @@ def _create_param_combinations(hyperparams: Dict) -> list:
     """Crea tutte le combinazioni di iperparametri."""
     import itertools
     
-    keys = hyperparams.keys()
-    values = hyperparams.values()
+    # Normalizza: accetta scalari trasformandoli in liste
+    keys = list(hyperparams.keys())
+    values = []
+    for k in keys:
+        v = hyperparams[k]
+        if isinstance(v, (list, tuple)):
+            values.append(list(v))
+        else:
+            values.append([v])
     combinations = list(itertools.product(*values))
     
     return [dict(zip(keys, combo)) for combo in combinations]

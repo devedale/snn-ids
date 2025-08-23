@@ -12,7 +12,7 @@ import os
 
 DATA_CONFIG = {
     # Dataset
-    "dataset_path": "data/cicids/2018",
+    "dataset_path": "data",
     "timestamp_column": "Timestamp",
     "target_column": "Label",
     # Identificatore del flusso (necessario per reassembly)

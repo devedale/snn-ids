@@ -176,6 +176,131 @@ class SNNIDSBenchmark:
         
         return results
     
+    def run_colab_benchmark(self) -> Dict[str, Any]:
+        """Benchmark ottimizzato per Google Colab con iperparametri significativi."""
+        print("🚀 COLAB BENCHMARK - Iperparametri Significativi")
+        print("=" * 60)
+        
+        # Configurazione ottimizzata per Colab
+        colab_config = {
+            'sample_size': 8000,
+            'time_windows': [
+                {'window_size': 30, 'step': 15, 'name': '30s_15s'},
+                {'window_size': 60, 'step': 30, 'name': '1m_30s'},
+                {'window_size': 300, 'step': 150, 'name': '5m_2.5m'},
+            ],
+            'models': [
+                {'type': 'dense', 'name': 'Dense_Baseline', 'params': {'epochs': 3, 'batch_size': 64}},
+                {'type': 'gru', 'name': 'GRU_Fast', 'params': {'epochs': 3, 'batch_size': 32, 'gru_units': 64}},
+                {'type': 'lstm', 'name': 'LSTM_Optimized', 'params': {'epochs': 3, 'batch_size': 32, 'lstm_units': 64}}
+            ],
+            'learning_rates': [0.001, 0.0005],
+            'aggregation_stats': [
+                ['sum', 'mean', 'max'],
+                ['sum', 'mean', 'std', 'max']
+            ]
+        }
+        
+        # Merge con override utente
+        config = {**colab_config, **self.config_override}
+        
+        start_time = time.time()
+        all_results = []
+        
+        total_configs = (len(config['time_windows']) * len(config['models']) * 
+                        len(config['learning_rates']) * len(config['aggregation_stats']))
+        
+        print(f"🔢 Configurazioni totali: {total_configs}")
+        print(f"⏰ Tempo stimato: ~{total_configs * 2:.0f}-{total_configs * 4:.0f} minuti")
+        
+        config_num = 0
+        
+        # Loop attraverso tutte le configurazioni
+        for window_config in config['time_windows']:
+            for model_config in config['models']:
+                for lr in config['learning_rates']:
+                    for agg_stats in config['aggregation_stats']:
+                        
+                        config_num += 1
+                        config_start = time.time()
+                        
+                        print(f"\n🧪 CONFIGURAZIONE {config_num}/{total_configs}")
+                        print(f"⏱️ Finestra: {window_config['name']}")
+                        print(f"🤖 Modello: {model_config['name']}")
+                        print(f"📈 Learning Rate: {lr}")
+                        print(f"📊 Aggregazioni: {agg_stats}")
+                        print("-" * 40)
+                        
+                        try:
+                            # Configura per questo test
+                            test_config = {
+                                'sample_size': config['sample_size'],
+                                'model_type': model_config['type'],
+                                'hyperparameters': {
+                                    **model_config['params'],
+                                    'learning_rate': [lr]
+                                }
+                            }
+                            
+                            # Override temporaneo
+                            original_config = self.config_override.copy()
+                            self.config_override.update(test_config)
+                            
+                            # Esegui preprocessing e training
+                            prep_result, X, y, label_encoder = self.run_preprocessing_test()
+                            if prep_result['status'] != 'success':
+                                print(f"❌ Preprocessing fallito: {prep_result.get('error', 'Unknown')}")
+                                continue
+                            
+                            train_result = self.run_training_test(X, y, label_encoder)
+                            if train_result['status'] != 'success':
+                                print(f"❌ Training fallito: {train_result.get('error', 'Unknown')}")
+                                continue
+                            
+                            # Salva risultati
+                            config_time = time.time() - config_start
+                            result = {
+                                'config_id': config_num,
+                                'window_config': window_config,
+                                'model_config': model_config,
+                                'learning_rate': lr,
+                                'aggregation_stats': agg_stats,
+                                'data_shape': {'X': X.shape, 'y': y.shape},
+                                'preprocessing': prep_result,
+                                'training': train_result,
+                                'config_time': config_time
+                            }
+                            
+                            all_results.append(result)
+                            
+                            print(f"✅ Completato in {config_time:.1f}s")
+                            if 'accuracy' in train_result:
+                                print(f"📊 Accuracy: {train_result['accuracy']:.3f}")
+                            
+                            # Ripristina configurazione
+                            self.config_override = original_config
+                            
+                        except Exception as e:
+                            print(f"❌ Errore configurazione {config_num}: {e}")
+                            continue
+        
+        # Risultati finali
+        total_time = time.time() - start_time
+        results = {
+            'timestamp': self.timestamp,
+            'total_time': total_time,
+            'total_configs': total_configs,
+            'completed_configs': len(all_results),
+            'configurations': all_results,
+            'overall_status': 'success' if all_results else 'failed'
+        }
+        
+        print(f"\n🎉 COLAB BENCHMARK COMPLETATO!")
+        print(f"⏰ Tempo totale: {total_time/60:.1f} minuti")
+        print(f"✅ Configurazioni completate: {len(all_results)}/{total_configs}")
+        
+        return results
+    
     def run_full_benchmark(self) -> Dict[str, Any]:
         """Benchmark completo con tutte le configurazioni."""
         print("🚀 BENCHMARK COMPLETO")
@@ -378,6 +503,7 @@ def main():
         epilog='''
 Esempi:
   python3 benchmark.py --smoke-test                    # Test veloce
+  python3 benchmark.py --colab-benchmark               # Benchmark per Colab (36 config)
   python3 benchmark.py --full                          # Benchmark completo
   python3 benchmark.py --sample-size 10000 --model gru # Test custom
         '''
@@ -388,6 +514,8 @@ Esempi:
                        help='Esegue smoke test veloce')
     parser.add_argument('--full', action='store_true',
                        help='Esegue benchmark completo con tutti i modelli')
+    parser.add_argument('--colab-benchmark', action='store_true',
+                       help='Benchmark ottimizzato per Google Colab con iperparametri significativi')
     
     # Configurazioni custom
     parser.add_argument('--sample-size', type=int,
@@ -419,6 +547,8 @@ Esempi:
             results = benchmark.run_smoke_test()
         elif args.full:
             results = benchmark.run_full_benchmark()
+        elif args.colab_benchmark:
+            results = benchmark.run_colab_benchmark()
         else:
             # Test singolo: preprocessing + training
             print("🧪 TEST SINGOLO")

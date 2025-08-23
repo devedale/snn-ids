@@ -92,7 +92,7 @@ def _apply_noise_filter(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     ts_col = DATA_CONFIG["timestamp_column"]
-    flow_session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    flow_session_col = "Session_ID"
 
     df = df.copy()
     df = _ensure_timestamp(df)
@@ -154,8 +154,7 @@ def main():
         print(f"💾 Salvati X.npy e y.npy in {out_dir}")
 
 
-if __name__ == "__main__":
-    main()
+ 
 
 def load_and_balance_dataset(
     data_path: str,
@@ -355,6 +354,12 @@ def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
     
     df_processed = df.copy()
     
+    # 0. Rimuovi Flow_ID se presente (utilizzato solo per sessionizzazione)
+    flow_col = DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    if flow_col in df_processed.columns:
+        print(f"🗑️ Rimozione campo {flow_col} (utilizzato solo per sessionizzazione)")
+        df_processed = df_processed.drop(columns=[flow_col])
+    
     # 1. Trasforma IP in ottetti
     if PREPROCESSING_CONFIG["convert_ip_to_octets"]:
         df_processed = _convert_ip_to_octets(df_processed)
@@ -428,7 +433,7 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
 
     ts_col = DATA_CONFIG["timestamp_column"]
     tgt_col = DATA_CONFIG["target_column"]
-    session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    session_col = "Session_ID"
     benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
 
     feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
@@ -590,7 +595,7 @@ def _balance_flows(df: pd.DataFrame) -> pd.DataFrame:
 
     method = cfg.get("method", "undersample")
     ratio = float(cfg.get("ratio", 1.0))
-    session_col = "Session_ID" if "Session_ID" in df.columns else DATA_CONFIG.get("flow_id_column", "Flow_ID")
+    session_col = "Session_ID"
     tgt_col = DATA_CONFIG["target_column"]
     benign_label = DATA_CONFIG.get("benign_label", "BENIGN")
 
@@ -622,3 +627,7 @@ def _balance_flows(df: pd.DataFrame) -> pd.DataFrame:
         ben_keep = set(list(ben_sessions)[:n_ben_keep])
         keep_sessions = set(mal_sessions) | ben_keep
         return df[df[session_col].isin(keep_sessions)]
+
+
+if __name__ == "__main__":
+    main()

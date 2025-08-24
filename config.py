@@ -42,7 +42,7 @@ DATA_CONFIG = {
 
 PREPROCESSING_CONFIG = {
     # Campionamento e bilanciamento
-    "sample_size": 100000,
+    "sample_size": 10000,
     "balance_strategy": "security",  # 50% BENIGN, 50% ATTACCHI
     "benign_ratio": 0.5,
     "max_samples_per_class": 100000,
@@ -60,7 +60,11 @@ PREPROCESSING_CONFIG = {
     "step": 5,
     
     # Trasformazione IP in ottetti
-    "convert_ip_to_octets": True
+    "convert_ip_to_octets": True,
+
+    # Cache model-ready (X,y,label) per training rapido
+    "model_cache_enabled": True,
+    "model_cache_dir": "model_cache"
 }
 
 # ==============================================================================

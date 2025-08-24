@@ -12,6 +12,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils import resample
 from typing import Tuple, Optional, Dict, Any
+import pickle
 import json
 
 # Aggiungi path per import
@@ -429,6 +430,28 @@ def preprocess_pipeline(
     print(f"📁 Dataset: {data_path}")
     print(f"📊 Sample size: {sample_size}")
 
+    # 0. Cache model-ready (se presente, salta tutto e restituisce X,y,le)
+    if PREPROCESSING_CONFIG.get("model_cache_enabled", False):
+        cache_dir_model = PREPROCESSING_CONFIG.get("model_cache_dir", "model_cache")
+        os.makedirs(cache_dir_model, exist_ok=True)
+        # chiave deterministica basata su sample, windowing e features
+        cache_key = f"size{sample_size}_win{PREPROCESSING_CONFIG.get('window_size', 0)}_step{PREPROCESSING_CONFIG.get('step', 0)}_features{len(DATA_CONFIG.get('feature_columns', []))}"
+        npz_path = os.path.join(cache_dir_model, f"model_ready_{cache_key}.npz")
+        le_path = os.path.join(cache_dir_model, f"label_encoder_{cache_key}.pkl")
+        if os.path.exists(npz_path) and os.path.exists(le_path):
+            print(f"📦 Cache model-ready trovata: {npz_path}. Carico X,y e LabelEncoder…")
+            data = np.load(npz_path)
+            with open(le_path, 'rb') as f:
+                label_encoder = pickle.load(f)
+            X = data['X']
+            y = data['y']
+            print(f"✅ Preprocessing completato (da cache)!")
+            print(f"📊 X shape: {X.shape}")
+            print(f"📊 y shape: {y.shape}")
+            if y.size > 0:
+                print(f"🏷️ Classi: {len(np.unique(y))}")
+            return X, y, label_encoder
+
     # 1. Inizializza la cache se abilitata
     if PREPROCESSING_CONFIG.get("cache_enabled", False):
         cache_dir = PREPROCESSING_CONFIG["cache_dir"]
@@ -454,5 +477,20 @@ def preprocess_pipeline(
     print(f"📊 y shape: {y.shape}")
     if y.size > 0:
         print(f"🏷️ Classi: {len(np.unique(y))}")
-    
+
+    # 4. Salva cache model-ready
+    if PREPROCESSING_CONFIG.get("model_cache_enabled", False):
+        cache_dir_model = PREPROCESSING_CONFIG.get("model_cache_dir", "model_cache")
+        os.makedirs(cache_dir_model, exist_ok=True)
+        cache_key = f"size{sample_size}_win{PREPROCESSING_CONFIG.get('window_size', 0)}_step{PREPROCESSING_CONFIG.get('step', 0)}_features{len(DATA_CONFIG.get('feature_columns', []))}"
+        npz_path = os.path.join(cache_dir_model, f"model_ready_{cache_key}.npz")
+        le_path = os.path.join(cache_dir_model, f"label_encoder_{cache_key}.pkl")
+        try:
+            np.savez_compressed(npz_path, X=X, y=y)
+            with open(le_path, 'wb') as f:
+                pickle.dump(label_encoder, f)
+            print(f"💾 Cache model-ready salvata: {npz_path}")
+        except Exception as e:
+            print(f"⚠️ Errore nel salvataggio cache model-ready: {e}")
+
     return X, y, label_encoder

@@ -396,7 +396,7 @@ Esempi di utilizzo:
         # Crea sempre l'archivio ZIP alla fine
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         zip_filename = f"benchmark_run_{ts}.zip"
-        directories_to_zip = ["benchmark_results", "preprocessed_cache"]
+        directories_to_zip = ["benchmark_results"]
         benchmark._zip_artifacts(directories_to_zip, zip_filename)
 
     return exit_code

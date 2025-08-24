@@ -26,6 +26,13 @@ except Exception:
 # Aggiungi path per import
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
+from preprocessing.utils import (
+    ensure_timestamp as utils_ensure_timestamp,
+    sessionize_flows as utils_sessionize_flows,
+    compute_base_cache_dir as utils_compute_base_cache_dir,
+    compute_windows_cache_dir as utils_compute_windows_cache_dir,
+    aggregate_features as utils_aggregate_features,
+)
 
 
 # ==============================================================================
@@ -46,30 +53,16 @@ def _json_hash(data: Dict[str, Any]) -> str:
 
 
 def _compute_base_cache_dir(data_path: str, sample_size: int, balance_strategy: str, benign_ratio: float) -> str:
-    cache_root = PREPROCESSING_CONFIG.get("cache_dir", "preprocessed_cache")
-    os.makedirs(cache_root, exist_ok=True)
-    # Firma del dataset: elenco file csv con size e mtime + parametri principali
-    csv_files = sorted(glob.glob(os.path.join(data_path, "*.csv")))
-    files_meta = []
-    for fp in csv_files:
-        try:
-            files_meta.append({
-                "name": os.path.basename(fp),
-                "size": os.path.getsize(fp),
-                "mtime": int(os.path.getmtime(fp))
-            })
-        except Exception:
-            files_meta.append({"name": os.path.basename(fp)})
-    signature = {
-        "files": files_meta,
-        "sample_size": int(sample_size) if sample_size is not None else None,
-        "balance_strategy": balance_strategy,
-        "benign_ratio": float(benign_ratio),
-        "feature_columns": DATA_CONFIG.get("feature_columns", []),
-        "convert_ip_to_octets": PREPROCESSING_CONFIG.get("convert_ip_to_octets", True)
-    }
-    key = _json_hash(signature)
-    return os.path.join(cache_root, f"base_{key}")
+    return utils_compute_base_cache_dir(
+        data_path=data_path,
+        sample_size=sample_size,
+        balance_strategy=balance_strategy,
+        benign_ratio=benign_ratio,
+        feature_columns=DATA_CONFIG.get("feature_columns", []),
+        convert_ip_to_octets=PREPROCESSING_CONFIG.get("convert_ip_to_octets", True),
+        cache_root=PREPROCESSING_CONFIG.get("cache_dir", "preprocessed_cache"),
+        target_type=TRAINING_CONFIG.get("target_type")
+    )
 
 
 def _compute_windows_cache_dir(base_dir: str) -> str:
@@ -84,59 +77,26 @@ def _compute_windows_cache_dir(base_dir: str) -> str:
         "output_mode": PREPROCESSING_CONFIG.get("output_mode"),
         "aggregation_stats": PREPROCESSING_CONFIG.get("aggregation_stats")
     }
-    key = _json_hash(params)
-    return os.path.join(base_dir, "windows", key)
+    return utils_compute_windows_cache_dir(base_dir, params)
 
 
 def _ensure_timestamp(df: pd.DataFrame) -> pd.DataFrame:
-    ts_col = DATA_CONFIG["timestamp_column"]
-    if ts_col not in df.columns:
-        return df
-    if not np.issubdtype(df[ts_col].dtype, np.datetime64):
-        fmt = DATA_CONFIG.get("timestamp_format")
-        if fmt:
-            df[ts_col] = pd.to_datetime(df[ts_col], format=fmt, errors='coerce')
-        else:
-            df[ts_col] = pd.to_datetime(df[ts_col], errors='coerce')
-    return df
+    return utils_ensure_timestamp(df, DATA_CONFIG["timestamp_column"], DATA_CONFIG.get("timestamp_format"))
 
 
 def _sessionize_flows(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Crea sessioni per ciascun Flow_ID in base al timeout configurabile.
-    Aggiunge la colonna 'Session_Index' e 'Session_ID' (FlowID#idx).
-    """
     flow_col = DATA_CONFIG.get("flow_id_column", "Flow_ID")
-    ts_col = DATA_CONFIG["timestamp_column"]
-    # Risolvi nome colonna flow id con fallback comuni
     if flow_col not in df.columns:
         for cand in ["Flow_ID", "Flow ID", "FlowID"]:
             if cand in df.columns:
                 flow_col = cand
                 break
-    if flow_col not in df.columns or ts_col not in df.columns:
-        return df
-
-    df = _ensure_timestamp(df)
-    timeout_s = PREPROCESSING_CONFIG.get("session_timeout_seconds", 60)
-    df = df.sort_values([flow_col, ts_col]).reset_index(drop=True)
-
-    session_indices: List[int] = []
-    current_idx = -1
-    last_flow = None
-    last_ts = None
-    timeout = timedelta(seconds=timeout_s)
-
-    for flow_id, ts in df[[flow_col, ts_col]].itertuples(index=False, name=None):
-        if (flow_id != last_flow) or (last_ts is None) or (pd.isna(ts)) or (pd.isna(last_ts)) or (ts - last_ts > timeout):
-            current_idx += 1
-        session_indices.append(current_idx)
-        last_flow = flow_id
-        last_ts = ts
-
-    df["Session_Index"] = session_indices
-    df["Session_ID"] = df[flow_col].astype(str) + "#" + df["Session_Index"].astype(str)
-    return df
+    return utils_sessionize_flows(
+        _ensure_timestamp(df.copy()),
+        flow_col=flow_col,
+        ts_col=DATA_CONFIG["timestamp_column"],
+        timeout_seconds=int(PREPROCESSING_CONFIG.get("session_timeout_seconds", 60))
+    )
 
 
 def _apply_noise_filter(df: pd.DataFrame) -> pd.DataFrame:
@@ -180,7 +140,10 @@ def _apply_noise_filter(df: pd.DataFrame) -> pd.DataFrame:
         df["_is_mal"] = pd.concat(smoothed).sort_index()
         df["_is_mal"] = (df["_is_mal"] >= 0.5).astype(int)
 
-    df[DATA_CONFIG["target_column"]] = df[DATA_CONFIG["target_column"]].where(df["_is_mal"] == 0, other="MALICIOUS")
+    # Non sovrascrivere le label multiclass: crea una colonna binaria separata
+    # Usa np.where per evitare mismatch di shape
+    is_binary = (TRAINING_CONFIG.get("target_type", "multiclass") == "binary")
+    df["Label_Binary"] = np.where(df["_is_mal"] == 1, "MALICIOUS", benign)
     df.drop(columns=["_is_mal"], inplace=True)
     return df
 
@@ -257,6 +220,9 @@ def load_and_balance_dataset(
             
             # Carica tutto il file
             df_file = pd.read_csv(file_path)
+            # Traccia provenienza record e indice originale
+            df_file['_source_file'] = os.path.basename(file_path)
+            df_file['_row_id'] = np.arange(len(df_file))
             df_file = _ensure_timestamp(df_file)
             
             if 'Label' in df_file.columns:
@@ -291,6 +257,9 @@ def load_and_balance_dataset(
                 df_file = df_file.head(target_per_file)
         else:
             df_file = pd.read_csv(file_path)
+            # Traccia provenienza record e indice originale
+            df_file['_source_file'] = os.path.basename(file_path)
+            df_file['_row_id'] = np.arange(len(df_file))
             df_file = _ensure_timestamp(df_file)
         
         all_data.append(df_file)
@@ -434,8 +403,10 @@ def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
     
     # 2. Encoding delle etichette
     label_encoder = LabelEncoder()
-    if 'Label' in df_processed.columns:
-        df_processed['Label_Encoded'] = label_encoder.fit_transform(df_processed['Label'])
+    # Se target binario, usa Label_Binary (creata da _apply_noise_filter); altrimenti usa Label multiclasse originale
+    target_col_for_encoding = 'Label_Binary' if TRAINING_CONFIG.get('target_type', 'multiclass') == 'binary' and 'Label_Binary' in df_processed.columns else 'Label'
+    if target_col_for_encoding in df_processed.columns:
+        df_processed['Label_Encoded'] = label_encoder.fit_transform(df_processed[target_col_for_encoding])
         
         # Salva mapping
         os.makedirs(TRAINING_CONFIG["output_path"], exist_ok=True)
@@ -480,7 +451,7 @@ def _ip_to_octet(ip_str: str, octet_index: int) -> int:
         pass
     return 0
 
-def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+def create_time_windows(df: pd.DataFrame, windows_cache_dir: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crea finestre temporali per modelli sequenziali oppure aggregati MLP.
     Supporta strategia "first_malicious_context" con N secondi prima e T dopo
@@ -491,6 +462,20 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
         X = df[feature_cols].values
         y = df['Label_Encoded'].values if 'Label_Encoded' in df.columns else np.zeros(len(df))
+        # Salva CSV semplice aggregato se richiesto
+        if windows_cache_dir:
+            try:
+                os.makedirs(windows_cache_dir, exist_ok=True)
+                out_csv = os.path.join(windows_cache_dir, "windows_summary.csv")
+                meta_df = pd.DataFrame({
+                    "Session_ID": df.get("Session_ID", pd.Series([None]*len(df))).values,
+                    "ts_min": pd.to_datetime(df.get(DATA_CONFIG["timestamp_column"], pd.Series([None]*len(df)))).values,
+                    "ts_max": pd.to_datetime(df.get(DATA_CONFIG["timestamp_column"], pd.Series([None]*len(df)))).values,
+                    "label": df.get(DATA_CONFIG["target_column"], pd.Series([None]*len(df))).values
+                })
+                meta_df.to_csv(out_csv, index=False)
+            except Exception:
+                pass
         return X, y
 
     print("⏱️ Creazione finestre temporali / contesti N/T...")
@@ -545,6 +530,8 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
 
     X_list: List[np.ndarray] = []
     y_list: List[int] = []
+    meta_rows = []
+    bins_rows = []
 
     def _label_window(labels: pd.Series) -> int:
         mode = PREPROCESSING_CONFIG.get("label_propagation", {}).get("mode", "majority")
@@ -566,8 +553,10 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         mal_idx = np.where(g[tgt_col].apply(_is_malicious).values)[0]
         if strategy == "first_malicious_context" and len(mal_idx) > 0:
             first_mal_ts = g.iloc[mal_idx[0]][ts_col]
+            last_mal_ts = g.iloc[mal_idx[-1]][ts_col]
             start_ts = first_mal_ts - pd.Timedelta(seconds=before_s)
-            end_ts = first_mal_ts + pd.Timedelta(seconds=after_s)
+            # Fine finestra riferita all'ULTIMO evento malevolo
+            end_ts = last_mal_ts + pd.Timedelta(seconds=after_s)
             win_df = g[(g[ts_col] >= start_ts) & (g[ts_col] <= end_ts)]
         else:
             win_df = g
@@ -586,14 +575,55 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
                 agg = _aggregate_features(bg, feature_cols)
                 bins.append(agg)
                 labels.append(bg[tgt_col])
+                # Riga per ogni bin (solo metadati, non features)
+                bins_rows.append({
+                    "Session_ID": session_id,
+                    "bin_index": int(b),
+                    "bin_start": (base_ts + pd.Timedelta(seconds=int(b)*bin_s)),
+                    "bin_end": (base_ts + pd.Timedelta(seconds=(int(b)+1)*bin_s)),
+                    "records": int(len(bg)),
+                    "label_bin_majority": int(np.mean([_is_malicious(l) for l in bg[tgt_col]]) >= 0.5)
+                })
             X_seq = np.stack(bins, axis=0)
             y_win = _label_window(pd.concat(labels))
             X_list.append(X_seq)
             y_list.append(y_win)
+            # Riga meta per finestra/sessione
+            # Calcola label multiclass dominante nella finestra (se presente)
+            win_labels = win_df[tgt_col]
+            label_dom = (
+                win_labels[win_labels != DATA_CONFIG.get("benign_label", "BENIGN")].mode().iloc[0]
+                if any(win_labels != DATA_CONFIG.get("benign_label", "BENIGN")) else DATA_CONFIG.get("benign_label", "BENIGN")
+            )
+            meta_rows.append({
+                "Session_ID": session_id,
+                "ts_start": win_df[ts_col].min(),
+                "ts_end": win_df[ts_col].max(),
+                "n_bins": int(X_seq.shape[0]),
+                "label_window": int(y_win),
+                "label_dominant": str(label_dom),
+                "records": int(len(win_df)),
+                "flow_id": str(session_id.split('#')[0]) if isinstance(session_id, str) and '#' in session_id else str(session_id)
+            })
         else:  # mlp_aggregated
             agg_row = _aggregate_features(win_df, feature_cols)
             X_list.append(agg_row)
             y_list.append(_label_window(win_df[tgt_col]))
+            win_labels = win_df[tgt_col]
+            label_dom = (
+                win_labels[win_labels != DATA_CONFIG.get("benign_label", "BENIGN")].mode().iloc[0]
+                if any(win_labels != DATA_CONFIG.get("benign_label", "BENIGN")) else DATA_CONFIG.get("benign_label", "BENIGN")
+            )
+            meta_rows.append({
+                "Session_ID": session_id,
+                "ts_start": win_df[ts_col].min(),
+                "ts_end": win_df[ts_col].max(),
+                "n_bins": 1,
+                "label_window": int(meta_rows[-1]["label_window"]) if meta_rows else int(_label_window(win_df[tgt_col])),
+                "label_dominant": str(label_dom),
+                "records": int(len(win_df)),
+                "flow_id": str(session_id.split('#')[0]) if isinstance(session_id, str) and '#' in session_id else str(session_id)
+            })
 
     if out_mode == "sequence":
         # pad/truncate sequenze alla max length per batch training semplice
@@ -607,32 +637,22 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         X = np.vstack(X_list) if X_list else np.zeros((0, len(feature_cols) * len(PREPROCESSING_CONFIG.get("aggregation_stats", []))))
 
     y = np.array(y_list, dtype=int)
+    # Salva CSV di metadati nelle cache se richiesto
+    if windows_cache_dir and meta_rows:
+        try:
+            os.makedirs(windows_cache_dir, exist_ok=True)
+            pd.DataFrame(meta_rows).to_csv(os.path.join(windows_cache_dir, "windows_summary.csv"), index=False)
+            if out_mode == "sequence" and bins_rows:
+                pd.DataFrame(bins_rows).to_csv(os.path.join(windows_cache_dir, "windows_bins.csv"), index=False)
+        except Exception:
+            pass
     print(f"✅ Finestre/aggregazioni create: X={X.shape}, y={y.shape}")
     return X, y
 
 
 def _aggregate_features(df_window: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
     stats = PREPROCESSING_CONFIG.get("aggregation_stats", ["sum", "mean", "std", "min", "max"])
-    agg = {}
-    for col in feature_cols:
-        series = pd.to_numeric(df_window[col], errors='coerce').fillna(0)
-        for st in stats:
-            if st == "sum":
-                agg[(col, "sum")] = float(series.sum())
-            elif st == "mean":
-                agg[(col, "mean")] = float(series.mean())
-            elif st == "std":
-                agg[(col, "std")] = float(series.std(ddof=0))
-            elif st == "min":
-                agg[(col, "min")] = float(series.min())
-            elif st == "max":
-                agg[(col, "max")] = float(series.max())
-    # Restituisce vettore nell'ordine deterministico col->stat
-    ordered = []
-    for col in feature_cols:
-        for st in stats:
-            ordered.append(agg[(col, st)])
-    return np.array(ordered, dtype=float)
+    return utils_aggregate_features(df_window, feature_cols, stats)
 
 def preprocess_pipeline(
     data_path: str = None,
@@ -730,7 +750,7 @@ def preprocess_pipeline(
     df_processed = _balance_flows(df_processed)
 
     # 5. Crea finestre temporali / aggregazioni
-    X, y = create_time_windows(df_processed)
+    X, y = create_time_windows(df_processed, windows_cache_dir=windows_cache_dir)
     # Salva X,y in cache
     if cache_enabled and windows_cache_dir:
         os.makedirs(windows_cache_dir, exist_ok=True)

@@ -67,10 +67,13 @@ PREPROCESSING_CONFIG = {
 
     # Strategia finestre per contesto di attacco (N prima, T dopo)
     "flow_window_strategy": "first_malicious_context",  # "first_malicious_context" | "fixed"
-    "window_before_first_malicious_s": 30,
-    "window_after_first_malicious_s": 30,
+    "window_before_first_malicious_s": 180,
+    "window_after_first_malicious_s": 60,
     "time_bin_seconds": 5,  # granularità per sequenze dentro il contesto N/T
     "session_timeout_seconds": 60,
+    # Solo intervalli malevoli nelle finestre e filtro sequenze troppo corte
+    "malicious_only_windows": True,
+    "min_sequence_bins": 2,
 
     # Propagazione/gestione etichette per finestra
     "label_propagation": {
@@ -131,7 +134,9 @@ TRAINING_CONFIG = {
     # Esecuzione per-epoca (preprocessing a flussi per epoca)
     "preprocess_per_epoch": False,
     "flows_per_epoch": 5000,
-    "epoch_selection_mode": "sequential"  # "sequential" | "parallel"
+    "epoch_selection_mode": "sequential",  # "sequential" | "parallel"
+    # Target type preferito (non vincolante; i modelli scelgono l'head in base a y)
+    "target_type": "multiclass"  # "binary" | "multiclass"
 }
 
 # ==============================================================================
@@ -184,6 +189,150 @@ BENCHMARK_CONFIG = {
         "hyperparameters": {
             "epochs": [2],
             "batch_size": [32]
+        }
+    }
+}
+
+# ==============================================================================
+# REGISTRI / PROFILI (per configurazioni modulari e generalizzate)
+# ==============================================================================
+
+# Registri semplici (nomi simbolici -> identificatori logici)
+# NOTA: i nomi qui definiti sono usati come chiavi nelle config/preset;
+# l'effettiva implementazione è demandata ai moduli (preprocessing/training).
+
+MODEL_REGISTRY = {
+    "dense": "dense",
+    "gru": "gru",
+    "lstm": "lstm"
+}
+
+VALIDATION_REGISTRY = {
+    "k_fold": "k_fold",
+    "train_test_split": "train_test_split"
+}
+
+WINDOWING_STRATEGIES = {
+    "FirstMaliciousContext": {
+        "description": "Finestra dal primo all'ultimo evento malevolo con margini",
+        "params": ["before_s", "after_s", "malicious_only"]
+    },
+    "FixedWindow": {
+        "description": "Finestra fissa scorrevole",
+        "params": ["window_size", "step"]
+    },
+    "FullFlow": {
+        "description": "Intero flusso",
+        "params": []
+    }
+}
+
+LABELING_STRATEGIES = {
+    "BinaryAny": "Binario: qualsiasi evento malevolo -> 1",
+    "BinaryDominant": "Binario: maggioranza su finestra",
+    "MultiClassDominant": "Multiclasse: classe non-BENIGN dominante"
+}
+
+FEATURE_STRATEGIES = {
+    "SequenceBinner": {
+        "description": "Binning temporale e aggregazioni per sequenze",
+        "params": ["bin_seconds", "stats"]
+    },
+    "Aggregator": {
+        "description": "Aggregazione finestra per MLP",
+        "params": ["stats"]
+    }
+}
+
+BALANCING_STRATEGIES = {
+    "FlowLevel": {
+        "description": "Bilanciamento a livello di flusso",
+        "params": ["method", "ratio"]
+    },
+    "None": {
+        "description": "Nessun bilanciamento",
+        "params": []
+    }
+}
+
+# Profili d'esempio (preset) per esecuzioni rapide e ripetibili
+PROFILES = {
+    "gru_sequence": {
+        "description": "GRU su sequenze con finestra malevola (before/after)",
+        "preprocessing": {
+            "use_time_windows": True,
+            "flow_window_strategy": "FirstMaliciousContext",
+            "window_before_first_malicious_s": 180,
+            "window_after_first_malicious_s": 60,
+            "malicious_only_windows": True,
+            "time_bin_seconds": 5,
+            "min_sequence_bins": 3,
+            "output_mode": "sequence",
+            "aggregation_stats": ["sum", "mean", "std", "max"],
+            "cache_enabled": True
+        },
+        "training": {
+            "model_type": "gru",
+            "validation_strategy": "k_fold",
+            "hyperparameters": {
+                "epochs": [3, 6],
+                "batch_size": [32],
+                "learning_rate": [0.001, 0.0005],
+                "activation": ["relu"],
+                "gru_units": [64]
+            },
+            "target_type": "multiclass"
+        }
+    },
+    "dense_aggregate": {
+        "description": "DENSE aggregato finestra (baseline veloce)",
+        "preprocessing": {
+            "use_time_windows": True,
+            "flow_window_strategy": "FirstMaliciousContext",
+            "window_before_first_malicious_s": 60,
+            "window_after_first_malicious_s": 30,
+            "malicious_only_windows": True,
+            "output_mode": "mlp_aggregated",
+            "aggregation_stats": ["sum", "mean", "max"],
+            "cache_enabled": True
+        },
+        "training": {
+            "model_type": "dense",
+            "validation_strategy": "train_test_split",
+            "hyperparameters": {
+                "epochs": [3],
+                "batch_size": [64],
+                "learning_rate": [0.001],
+                "activation": ["relu"]
+            },
+            "target_type": "binary"
+        }
+    },
+    "ablation_non_mal_only": {
+        "description": "Sequenze senza filtro 'malicious_only' per confronto",
+        "preprocessing": {
+            "use_time_windows": True,
+            "flow_window_strategy": "FirstMaliciousContext",
+            "window_before_first_malicious_s": 180,
+            "window_after_first_malicious_s": 60,
+            "malicious_only_windows": False,
+            "time_bin_seconds": 10,
+            "min_sequence_bins": 2,
+            "output_mode": "sequence",
+            "aggregation_stats": ["sum", "mean"],
+            "cache_enabled": True
+        },
+        "training": {
+            "model_type": "gru",
+            "validation_strategy": "k_fold",
+            "hyperparameters": {
+                "epochs": [3],
+                "batch_size": [32],
+                "learning_rate": [0.001],
+                "activation": ["relu"],
+                "gru_units": [64]
+            },
+            "target_type": "multiclass"
         }
     }
 }

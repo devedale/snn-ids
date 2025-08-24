@@ -17,65 +17,15 @@ from typing import Tuple, Dict, Any, Optional
 # Import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import TRAINING_CONFIG
+from training.models import build_model as build_model_factory
+from training.utils import param_grid, scale_features
 
 def build_model(model_type: str, input_shape: tuple, num_classes: int, params: Dict) -> tf.keras.Model:
-    """
-    Costruisce un modello Keras.
-    
-    Args:
-        model_type: Tipo di modello ('gru', 'lstm', 'dense')
-        input_shape: Forma dell'input
-        num_classes: Numero di classi
-        params: Parametri del modello
-        
-    Returns:
-        Modello Keras compilato
-    """
+    """Delegato alla factory centralizzata dei modelli."""
     print(f"🏗️ Costruzione modello {model_type}")
     print(f"📊 Input shape: {input_shape}")
     print(f"🏷️ Classi: {num_classes}")
-    
-    units = params.get('gru_units', params.get('lstm_units', 64))
-    activation = params.get('activation', 'relu')
-    learning_rate = params.get('learning_rate', 0.001)
-    is_binary = (num_classes == 2)
-    output_units = 1 if is_binary else num_classes
-    output_activation = 'sigmoid' if is_binary else 'softmax'
-    
-    if model_type == 'gru':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.GRU(units, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(output_units, activation=output_activation)
-        ])
-    elif model_type == 'lstm':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.LSTM(units, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(output_units, activation=output_activation)
-        ])
-    elif model_type == 'dense':
-        # MLP con 4 hidden layers da config
-        hidden = TRAINING_CONFIG.get('mlp_hidden_layers', [256, 128, 64, 32])
-        dropout = float(TRAINING_CONFIG.get('dropout_rate', 0.2))
-        layers = [tf.keras.layers.Input(shape=input_shape), tf.keras.layers.Flatten()]
-        for units in hidden:
-            layers.append(tf.keras.layers.Dense(int(units), activation=activation))
-            layers.append(tf.keras.layers.Dropout(dropout))
-        layers.append(tf.keras.layers.Dense(output_units, activation=output_activation))
-        model = tf.keras.Sequential(layers)
-    else:
-        raise ValueError(f"Tipo di modello non supportato: {model_type}")
-    
-    # Compilazione
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-    loss = 'binary_crossentropy' if is_binary else 'sparse_categorical_crossentropy'
-    model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
-    
+    model = build_model_factory(model_type, input_shape, num_classes, params)
     print(f"✅ Modello {model_type} creato e compilato")
     return model
 
@@ -185,21 +135,8 @@ def train_model(
     return best_model, training_log, model_path
 
 def _create_param_combinations(hyperparams: Dict) -> list:
-    """Crea tutte le combinazioni di iperparametri."""
-    import itertools
-    
-    # Normalizza: accetta scalari trasformandoli in liste
-    keys = list(hyperparams.keys())
-    values = []
-    for k in keys:
-        v = hyperparams[k]
-        if isinstance(v, (list, tuple)):
-            values.append(list(v))
-        else:
-            values.append([v])
-    combinations = list(itertools.product(*values))
-    
-    return [dict(zip(keys, combo)) for combo in combinations]
+    """Crea tutte le combinazioni di iperparametri (utils.param_grid)."""
+    return param_grid(hyperparams)
 
 def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) -> float:
     """Training con K-Fold cross validation."""
@@ -212,22 +149,8 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) -
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
         
-        # Scaling per-fold per evitare leakage
-        is_sequence = len(X_train.shape) == 3
-        if is_sequence:
-            # (samples, timesteps, features) -> scala per features
-            n_features = X_train.shape[2]
-            scaler = StandardScaler()
-            X_train_2d = X_train.reshape(-1, n_features)
-            X_val_2d = X_val.reshape(-1, n_features)
-            scaler.fit(X_train_2d)
-            X_train = scaler.transform(X_train_2d).reshape(X_train.shape)
-            X_val = scaler.transform(X_val_2d).reshape(X_val.shape)
-        else:
-            scaler = StandardScaler()
-            scaler.fit(X_train)
-            X_train = scaler.transform(X_train)
-            X_val = scaler.transform(X_val)
+        # Scaling per-fold per evitare leakage (utils.scale_features)
+        X_train, X_val = scale_features(X_train, X_val)
 
         # Costruisci e addestra modello (usa tutto y per contare classi)
         num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
@@ -257,21 +180,8 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict) ->
     
     print(f"  Train: {X_train.shape[0]}, Test: {X_test.shape[0]}")
     
-    # Scaling per split per evitare leakage
-    is_sequence = len(X_train.shape) == 3
-    if is_sequence:
-        n_features = X_train.shape[2]
-        scaler = StandardScaler()
-        X_train_2d = X_train.reshape(-1, n_features)
-        X_test_2d = X_test.reshape(-1, n_features)
-        scaler.fit(X_train_2d)
-        X_train = scaler.transform(X_train_2d).reshape(X_train.shape)
-        X_test = scaler.transform(X_test_2d).reshape(X_test.shape)
-    else:
-        scaler = StandardScaler()
-        scaler.fit(X_train)
-        X_train = scaler.transform(X_train)
-        X_test = scaler.transform(X_test)
+    # Scaling per split per evitare leakage (utils.scale_features)
+    X_train, X_test = scale_features(X_train, X_test)
 
     # Costruisci e addestra modello (usa tutto y per contare classi)
     num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti

@@ -263,9 +263,9 @@ class SNNIDSBenchmark:
                     'accuracy': test_run.get('best_accuracy'),
                     'training_time_s': test_run.get('training_time'),
                     'total_time_s': test_run.get('total_time'),
-                    'epochs': hyperparams.get('epochs', [None])[0],
-                    'batch_size': hyperparams.get('batch_size', [None])[0],
-                    'learning_rate': hyperparams.get('learning_rate', [None])[0],
+                    'epochs': hyperparams.get('epochs'),
+                    'batch_size': hyperparams.get('batch_size'),
+                    'learning_rate': hyperparams.get('learning_rate'),
                 }
                 flat_data.append(row)
             

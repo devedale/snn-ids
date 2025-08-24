@@ -34,10 +34,11 @@ class PhaseResult:
 class ProgressiveBenchmark:
     """Orchestratore per benchmark progressivo a fasi."""
     
-    def __init__(self, sample_size: int = None, data_path: str = None):
+    def __init__(self, sample_size: int = None, data_path: str = None, models_to_test: List[str] = None):
         """Inizializza il benchmark progressivo."""
         self.sample_size = sample_size or PREPROCESSING_CONFIG['sample_size']
         self.data_path = data_path or DATA_CONFIG['dataset_path']
+        self.models_to_test = models_to_test or ['dense', 'gru', 'lstm']
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.output_dir = f"progressive_benchmark_{self.timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
@@ -49,6 +50,7 @@ class ProgressiveBenchmark:
         print(f"🚀 BENCHMARK PROGRESSIVO INIZIATO")
         print(f"📁 Output directory: {self.output_dir}")
         print(f"📊 Sample size: {self.sample_size}")
+        print(f"🤖 Modelli da testare: {', '.join(self.models_to_test)}")
         
     def run_progressive_optimization(self) -> Dict[str, Any]:
         """Esegue l'ottimizzazione progressiva completa."""
@@ -86,6 +88,9 @@ class ProgressiveBenchmark:
         # Salva tutti i risultati
         self._save_all_results(final_report)
         
+        # Genera e salva top 10 modelli
+        self._save_top_models_summary(final_report)
+        
         print(f"\n{'='*60}")
         print(f"🎉 OTTIMIZZAZIONE PROGRESSIVA COMPLETATA!")
         print(f"⏱️  Tempo totale: {total_time:.2f}s")
@@ -112,7 +117,8 @@ class ProgressiveBenchmark:
         }
         
         all_results = []
-        models_to_test = ['dense', 'gru', 'lstm']
+        # Usa modelli configurabili
+        models_to_test = self.models_to_test
         
         for model_type in models_to_test:
             for lr in learning_rates:
@@ -169,7 +175,7 @@ class ProgressiveBenchmark:
         }
         
         all_results = []
-        models_to_test = ['dense', 'gru', 'lstm']
+        models_to_test = self.models_to_test
         
         for model_type in models_to_test:
             for epochs in epochs_to_test:
@@ -222,7 +228,7 @@ class ProgressiveBenchmark:
         }
         
         all_results = []
-        models_to_test = ['dense', 'gru', 'lstm']
+        models_to_test = self.models_to_test
         
         for model_type in models_to_test:
             for activation in activations:
@@ -286,7 +292,7 @@ class ProgressiveBenchmark:
         }
         
         all_results = []
-        models_to_test = ['dense', 'gru', 'lstm']
+        models_to_test = self.models_to_test
         
         for model_type in models_to_test:
             for batch_size in batch_sizes:
@@ -495,6 +501,111 @@ class ProgressiveBenchmark:
         
         print(f"📄 Rapporto testuale salvato: {report_file}")
 
+    def _save_top_models_summary(self, final_report: Dict):
+        """Salva un riepilogo dei top 10 modelli ordinati per accuratezza."""
+        print(f"\n🏆 GENERAZIONE TOP 10 MODELLI")
+        print(f"{'─'*50}")
+        
+        # Raccoglie tutti i risultati di successo da tutte le fasi
+        all_successful_results = []
+        
+        for phase_data in final_report.get('detailed_phase_results', []):
+            phase_name = phase_data['phase_name']
+            
+            for result in phase_data.get('all_results', []):
+                if result.get('status') == 'success' and result.get('best_accuracy', 0) > 0:
+                    config = result.get('config', {})
+                    hyperparams = config.get('hyperparameters', {})
+                    
+                    model_info = {
+                        'rank': 0,  # Sarà assegnato dopo l'ordinamento
+                        'phase': phase_name,
+                        'test_id': result.get('test_id', 'unknown'),
+                        'model_type': config.get('model_type', 'unknown'),
+                        'accuracy': result.get('best_accuracy', 0),
+                        'training_time': result.get('training_time', 0),
+                        'total_time': result.get('total_time', 0),
+                        'epochs': hyperparams.get('epochs', [None])[0],
+                        'batch_size': hyperparams.get('batch_size', [None])[0],
+                        'learning_rate': hyperparams.get('learning_rate', [None])[0],
+                        'activation': hyperparams.get('activation', [None])[0],
+                        'lstm_units': hyperparams.get('lstm_units', [None])[0],
+                        'gru_units': hyperparams.get('gru_units', [None])[0],
+                        'dropout': hyperparams.get('dropout', [None])[0] if 'dropout' in hyperparams else None
+                    }
+                    all_successful_results.append(model_info)
+        
+        if not all_successful_results:
+            print("⚠️ Nessun risultato di successo trovato per il top 10")
+            return
+        
+        # Ordina per accuratezza (decrescente) e prende i top 10
+        top_models = sorted(all_successful_results, key=lambda x: x['accuracy'], reverse=True)[:10]
+        
+        # Assegna i rank
+        for i, model in enumerate(top_models, 1):
+            model['rank'] = i
+        
+        print(f"📊 Trovati {len(all_successful_results)} risultati, top 10 selezionati")
+        
+        # Salva JSON dei top 10
+        top_models_file = os.path.join(self.output_dir, "top_10_models.json")
+        with open(top_models_file, 'w') as f:
+            json.dump({
+                'timestamp': final_report.get('timestamp'),
+                'total_models_tested': len(all_successful_results),
+                'top_10_models': top_models
+            }, f, indent=2, default=str)
+        print(f"🏆 Top 10 JSON salvato: {top_models_file}")
+        
+        # Salva CSV dei top 10
+        try:
+            import pandas as pd
+            df_top = pd.DataFrame(top_models)
+            csv_file = os.path.join(self.output_dir, "top_10_models.csv")
+            df_top.to_csv(csv_file, index=False)
+            print(f"📊 Top 10 CSV salvato: {csv_file}")
+        except ImportError:
+            print("⚠️ Pandas non disponibile, CSV top 10 saltato")
+        
+        # Salva rapporto testuale dei top 10
+        top_report_file = os.path.join(self.output_dir, "top_10_models_report.txt")
+        with open(top_report_file, 'w') as f:
+            f.write("🏆 TOP 10 MODELLI - BENCHMARK PROGRESSIVO SNN-IDS\n")
+            f.write("="*70 + "\n\n")
+            
+            f.write(f"📅 Timestamp: {final_report.get('timestamp')}\n")
+            f.write(f"📊 Modelli testati totali: {len(all_successful_results)}\n")
+            f.write(f"🎯 Sample size: {final_report.get('sample_size')}\n\n")
+            
+            f.write("🏆 TOP 10 CONFIGURAZIONI:\n")
+            f.write("="*70 + "\n")
+            
+            for model in top_models:
+                f.write(f"\n#{model['rank']:2d}. {model['model_type'].upper()} - Accuracy: {model['accuracy']:.6f}\n")
+                f.write(f"     📋 Fase: {model['phase']}\n")
+                f.write(f"     ⚙️  Parametri:\n")
+                f.write(f"        • Epochs: {model['epochs']}\n")
+                f.write(f"        • Batch size: {model['batch_size']}\n")
+                f.write(f"        • Learning rate: {model['learning_rate']}\n")
+                f.write(f"        • Activation: {model['activation']}\n")
+                if model['model_type'] == 'gru' and model['gru_units']:
+                    f.write(f"        • GRU units: {model['gru_units']}\n")
+                elif model['model_type'] == 'lstm' and model['lstm_units']:
+                    f.write(f"        • LSTM units: {model['lstm_units']}\n")
+                if model['dropout'] is not None:
+                    f.write(f"        • Dropout: {model['dropout']}\n")
+                f.write(f"     ⏱️  Training time: {model['training_time']:.1f}s\n")
+                f.write(f"     🆔 Test ID: {model['test_id']}\n")
+        
+        print(f"📄 Top 10 report salvato: {top_report_file}")
+        
+        # Mostra top 5 in console
+        print(f"\n🏆 TOP 5 MODELLI:")
+        for i, model in enumerate(top_models[:5], 1):
+            print(f"  #{i}. {model['model_type'].upper()}: {model['accuracy']:.6f} "
+                  f"(lr={model['learning_rate']}, epochs={model['epochs']}, batch={model['batch_size']})")
+
 def main():
     """Entry point del benchmark progressivo."""
     parser = argparse.ArgumentParser(
@@ -503,11 +614,14 @@ def main():
         epilog='''
 Esempi di utilizzo:
 
-  # Eseguire benchmark progressivo con sample size di default
+  # Eseguire benchmark progressivo con sample size di default (tutti i modelli)
   python3 benchmark-progressive.py
 
-  # Eseguire con sample size personalizzato
-  python3 benchmark-progressive.py --sample-size 20000
+  # Eseguire solo su GRU (ottimizzazione mirata dopo aver identificato il vincente)
+  python3 benchmark-progressive.py --models gru --sample-size 20000
+
+  # Eseguire solo su GRU e LSTM (escludere dense)
+  python3 benchmark-progressive.py --models gru lstm
 
   # Eseguire con dataset personalizzato
   python3 benchmark-progressive.py --data-path /path/to/data --sample-size 50000
@@ -518,6 +632,8 @@ Esempi di utilizzo:
                        help='Numero di campioni da utilizzare (default: configurazione)')
     parser.add_argument('--data-path', type=str, 
                        help='Path ai dati del dataset (default: configurazione)')
+    parser.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'],
+                       help='Lista di modelli da testare (default: tutti) (es. --models gru lstm)')
     
     args = parser.parse_args()
     
@@ -525,7 +641,8 @@ Esempi di utilizzo:
         # Crea ed esegue il benchmark progressivo
         progressive_benchmark = ProgressiveBenchmark(
             sample_size=args.sample_size,
-            data_path=args.data_path
+            data_path=args.data_path,
+            models_to_test=args.models
         )
         
         results = progressive_benchmark.run_progressive_optimization()

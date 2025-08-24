@@ -332,6 +332,9 @@ class BestConfigBenchmark:
         # Salva risultati
         self._save_results(report)
         
+        # Genera e salva top 10 modelli
+        self._save_top_models_summary(report)
+        
         print(f"\n{'='*70}")
         print(f"🎉 FINE-TUNING COMPLETATO!")
         print(f"⏱️  Tempo totale: {total_time:.2f}s")
@@ -543,6 +546,161 @@ class BestConfigBenchmark:
                 f.write(f"    🎯 Miglior accuracy: {stats['best_accuracy']:.6f}\n\n")
         
         print(f"📄 Rapporto testuale: {report_file}")
+
+    def _save_top_models_summary(self, report: Dict):
+        """Salva un riepilogo dei top 10 modelli ordinati per accuratezza."""
+        print(f"\n🏆 GENERAZIONE TOP 10 MODELLI")
+        print(f"{'─'*50}")
+        
+        # Raccoglie tutti i risultati di successo da tutte le fasi
+        all_successful_results = []
+        
+        for phase_name, phase_data in report.get('detailed_results', {}).items():
+            if phase_name == 'final_optimized':
+                # Gestisce il risultato finale
+                if phase_data.get('status') == 'success' and phase_data.get('best_accuracy', 0) > 0:
+                    config = phase_data.get('config', {})
+                    hyperparams = config.get('hyperparameters', {})
+                    
+                    model_info = {
+                        'rank': 0,
+                        'phase': 'Final Optimized',
+                        'test_id': phase_data.get('test_id', 'final_optimized'),
+                        'model_type': config.get('model_type', 'gru'),
+                        'accuracy': phase_data.get('best_accuracy', 0),
+                        'training_time': phase_data.get('training_time', 0),
+                        'total_time': phase_data.get('total_time', 0),
+                        'epochs': hyperparams.get('epochs', [None])[0],
+                        'batch_size': hyperparams.get('batch_size', [None])[0],
+                        'learning_rate': hyperparams.get('learning_rate', [None])[0],
+                        'activation': hyperparams.get('activation', ['tanh'])[0],
+                        'gru_units': hyperparams.get('gru_units', [None])[0],
+                        'dropout': hyperparams.get('dropout', [None])[0] if 'dropout' in hyperparams else None
+                    }
+                    all_successful_results.append(model_info)
+                continue
+            
+            # Gestisce le fasi normali
+            if isinstance(phase_data, dict) and 'all_results' in phase_data:
+                for result in phase_data['all_results']:
+                    if result.get('status') == 'success' and result.get('best_accuracy', 0) > 0:
+                        config = result.get('config', {})
+                        hyperparams = config.get('hyperparameters', {})
+                        
+                        model_info = {
+                            'rank': 0,
+                            'phase': phase_name.replace('_', ' ').title(),
+                            'test_id': result.get('test_id', 'unknown'),
+                            'model_type': config.get('model_type', 'gru'),
+                            'accuracy': result.get('best_accuracy', 0),
+                            'training_time': result.get('training_time', 0),
+                            'total_time': result.get('total_time', 0),
+                            'epochs': hyperparams.get('epochs', [None])[0],
+                            'batch_size': hyperparams.get('batch_size', [None])[0],
+                            'learning_rate': hyperparams.get('learning_rate', [None])[0],
+                            'activation': hyperparams.get('activation', ['tanh'])[0],
+                            'gru_units': hyperparams.get('gru_units', [None])[0],
+                            'dropout': hyperparams.get('dropout', [None])[0] if 'dropout' in hyperparams else None
+                        }
+                        all_successful_results.append(model_info)
+            elif isinstance(phase_data, dict) and 'best_accuracy' in phase_data:
+                # Gestisce il baseline
+                if phase_data.get('status') == 'success' and phase_data.get('best_accuracy', 0) > 0:
+                    config = phase_data.get('config', {})
+                    hyperparams = config.get('hyperparameters', {})
+                    
+                    model_info = {
+                        'rank': 0,
+                        'phase': 'Baseline',
+                        'test_id': phase_data.get('test_id', 'baseline'),
+                        'model_type': config.get('model_type', 'gru'),
+                        'accuracy': phase_data.get('best_accuracy', 0),
+                        'training_time': phase_data.get('training_time', 0),
+                        'total_time': phase_data.get('total_time', 0),
+                        'epochs': hyperparams.get('epochs', [None])[0],
+                        'batch_size': hyperparams.get('batch_size', [None])[0],
+                        'learning_rate': hyperparams.get('learning_rate', [None])[0],
+                        'activation': hyperparams.get('activation', ['tanh'])[0],
+                        'gru_units': hyperparams.get('gru_units', [None])[0],
+                        'dropout': hyperparams.get('dropout', [None])[0] if 'dropout' in hyperparams else None
+                    }
+                    all_successful_results.append(model_info)
+        
+        if not all_successful_results:
+            print("⚠️ Nessun risultato di successo trovato per il top 10")
+            return
+        
+        # Ordina per accuratezza (decrescente) e prende i top 10
+        top_models = sorted(all_successful_results, key=lambda x: x['accuracy'], reverse=True)[:10]
+        
+        # Assegna i rank
+        for i, model in enumerate(top_models, 1):
+            model['rank'] = i
+        
+        print(f"📊 Trovati {len(all_successful_results)} risultati, top 10 selezionati")
+        
+        # Salva JSON dei top 10
+        top_models_file = os.path.join(self.output_dir, "top_10_models.json")
+        with open(top_models_file, 'w') as f:
+            json.dump({
+                'timestamp': report.get('timestamp'),
+                'baseline_accuracy': report.get('baseline_accuracy'),
+                'final_accuracy': report.get('final_accuracy'),
+                'total_models_tested': len(all_successful_results),
+                'top_10_models': top_models
+            }, f, indent=2, default=str)
+        print(f"🏆 Top 10 JSON salvato: {top_models_file}")
+        
+        # Salva CSV dei top 10
+        try:
+            import pandas as pd
+            df_top = pd.DataFrame(top_models)
+            csv_file = os.path.join(self.output_dir, "top_10_models.csv")
+            df_top.to_csv(csv_file, index=False)
+            print(f"📊 Top 10 CSV salvato: {csv_file}")
+        except ImportError:
+            print("⚠️ Pandas non disponibile, CSV top 10 saltato")
+        
+        # Salva rapporto testuale dei top 10
+        top_report_file = os.path.join(self.output_dir, "top_10_models_report.txt")
+        with open(top_report_file, 'w') as f:
+            f.write("🏆 TOP 10 MODELLI - FINE-TUNING GRU SNN-IDS\n")
+            f.write("="*70 + "\n\n")
+            
+            f.write(f"📅 Timestamp: {report.get('timestamp')}\n")
+            f.write(f"📊 Modelli testati totali: {len(all_successful_results)}\n")
+            f.write(f"🎯 Sample size: {report.get('sample_size')}\n")
+            f.write(f"📈 Accuracy baseline: {report.get('baseline_accuracy', 0):.6f}\n")
+            f.write(f"🏆 Accuracy finale: {report.get('final_accuracy', 0):.6f}\n")
+            f.write(f"📈 Miglioramento: +{report.get('improvement', {}).get('absolute', 0):.6f}\n\n")
+            
+            f.write("🏆 TOP 10 CONFIGURAZIONI GRU:\n")
+            f.write("="*70 + "\n")
+            
+            for model in top_models:
+                f.write(f"\n#{model['rank']:2d}. {model['model_type'].upper()} - Accuracy: {model['accuracy']:.6f}\n")
+                f.write(f"     📋 Fase: {model['phase']}\n")
+                f.write(f"     ⚙️  Parametri:\n")
+                f.write(f"        • Epochs: {model['epochs']}\n")
+                f.write(f"        • Batch size: {model['batch_size']}\n")
+                f.write(f"        • Learning rate: {model['learning_rate']}\n")
+                f.write(f"        • Activation: {model['activation']}\n")
+                if model['gru_units']:
+                    f.write(f"        • GRU units: {model['gru_units']}\n")
+                if model['dropout'] is not None:
+                    f.write(f"        • Dropout: {model['dropout']}\n")
+                f.write(f"     ⏱️  Training time: {model['training_time']:.1f}s\n")
+                f.write(f"     🆔 Test ID: {model['test_id']}\n")
+        
+        print(f"📄 Top 10 report salvato: {top_report_file}")
+        
+        # Mostra top 5 in console
+        print(f"\n🏆 TOP 5 CONFIGURAZIONI GRU:")
+        for i, model in enumerate(top_models[:5], 1):
+            improvement = model['accuracy'] - report.get('baseline_accuracy', 0)
+            print(f"  #{i}. Accuracy: {model['accuracy']:.6f} (+{improvement:.6f}) "
+                  f"[lr={model['learning_rate']}, epochs={model['epochs']}, "
+                  f"batch={model['batch_size']}, units={model['gru_units']}]")
 
 def main():
     """Entry point del benchmark configurazione migliore."""

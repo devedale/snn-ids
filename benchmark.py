@@ -127,12 +127,17 @@ class SNNIDSBenchmark:
         result['test_type'] = 'smoke_test'
         return result
 
-    def run_full_benchmark(self) -> Dict[str, Any]:
+    def run_full_benchmark(self, models_to_test: List[str] = None) -> Dict[str, Any]:
         """Benchmark completo che testa più modelli e iperparametri."""
         print("🚀 BENCHMARK COMPLETO")
         
+        # Modelli da testare - configurabile o default
+        if models_to_test is None:
+            models_to_test = self.config_override.get('models_to_test', ['dense', 'gru', 'lstm'])
+        
+        print(f"🤖 Modelli da testare: {', '.join(models_to_test)}")
+        
         # Griglia di parametri da testare
-        models_to_test = ['dense', 'gru', 'lstm']
         hyperparam_grid = {
             'epochs': TRAINING_CONFIG['hyperparameters'].get('epochs', [5, 10]),
             'batch_size': TRAINING_CONFIG['hyperparameters'].get('batch_size', [32, 64]),
@@ -318,10 +323,13 @@ Esempi di utilizzo:
   # 3. Eseguire il benchmark completo su tutti i modelli e iperparametri di default
   python3 benchmark.py --full
 
-  # 4. Eseguire il benchmark completo con una dimensione del campione personalizzata
-  python3 benchmark.py --full --sample-size 50000
+  # 4. Eseguire il benchmark completo solo su modelli specifici
+  python3 benchmark.py --full --models gru lstm
 
-  # 5. Eseguire un singolo test specificando iperparametri custom (nota: devono essere nel formato atteso dal modulo di training)
+  # 5. Eseguire il benchmark completo solo su GRU (ottimizzazione mirata)
+  python3 benchmark.py --full --models gru --sample-size 50000
+
+  # 6. Eseguire un singolo test specificando iperparametri custom
   python3 benchmark.py --model lstm --epochs 15 --batch-size 128 --learning-rate 0.0005
         '''
     )
@@ -337,6 +345,8 @@ Esempi di utilizzo:
 
     # Argomenti per la configurazione del modello (usati in test singoli o come override)
     parser.add_argument('--model', choices=['dense', 'gru', 'lstm'], help='Tipo di modello da testare in un singolo run.')
+    parser.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'], 
+                       help='Lista di modelli da testare nel benchmark completo (es. --models gru lstm)')
     parser.add_argument('--epochs', type=int, help="Override del numero di epoche per il training (es. 10).")
     parser.add_argument('--batch-size', type=int, help="Override della batch size per il training (es. 64).")
     parser.add_argument('--learning-rate', type=float, help="Override del learning rate (es. 0.001).")
@@ -348,6 +358,7 @@ Esempi di utilizzo:
     if args.sample_size: config_override['sample_size'] = args.sample_size
     if args.data_path: config_override['data_path'] = args.data_path
     if args.model: config_override['model_type'] = args.model
+    if args.models: config_override['models_to_test'] = args.models
     
     # Gestione override iperparametri
     hyperparam_overrides = {}

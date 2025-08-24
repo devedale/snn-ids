@@ -266,11 +266,22 @@ class SNNIDSBenchmark:
     def _run_evaluation(self, model, X, y, label_encoder, model_type):
         """Esegue valutazione completa con visualizzazioni."""
         from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import StandardScaler
         
         print("\n📊 VALUTAZIONE COMPLETA")
         print("-" * 30)
         
         try:
+            # Scala i dati X prima della valutazione, come nel training
+            print("    ⚖️ Scaling dei dati di test...")
+            scaler = StandardScaler()
+            is_sequence = len(X.shape) == 3
+            if is_sequence:
+                n_features = X.shape[2]
+                X_scaled = scaler.fit_transform(X.reshape(-1, n_features)).reshape(X.shape)
+            else:
+                X_scaled = scaler.fit_transform(X)
+
             # Split per valutazione finale (gestione dataset piccoli)
             from collections import Counter
             class_counts = Counter(y)
@@ -280,18 +291,18 @@ class SNNIDSBenchmark:
                 # Dataset troppo piccolo per stratified split, usiamo split semplice
                 print(f"    ⚠️ Dataset piccolo (min classe: {min_class_size}), split semplice")
                 X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=0.2, random_state=42, stratify=None
+                    X_scaled, y, test_size=0.2, random_state=42, stratify=None
                 )
             else:
                 # Split stratificato normale
                 X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=0.2, random_state=42, stratify=y
+                    X_scaled, y, test_size=0.2, random_state=42, stratify=y
                 )
             
             # Verifica dimensione test set
             if len(X_test) < 5:
                 print(f"    ⚠️ Test set troppo piccolo ({len(X_test)} campioni), usando tutto il dataset")
-                X_test, y_test = X, y
+                X_test, y_test = X_scaled, y
             
             # Ottieni nomi delle classi
             if label_encoder and hasattr(label_encoder, 'classes_'):

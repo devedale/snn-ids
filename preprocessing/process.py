@@ -200,46 +200,70 @@ def _balance_cybersecurity(df: pd.DataFrame, target_size: Optional[int], benign_
     
     return balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
+def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder, list]:
     """
-    Preprocessa le features del dataset.
+    Preprocessa le features del dataset, gestendo IP, categoriche e numeriche.
     
     Args:
         df: Dataset raw
         
     Returns:
-        DataFrame processato e label encoder
+        DataFrame processato, label encoder, e lista finale delle feature.
     """
     print("🔄 Preprocessing features...")
     
     df_processed = df.copy()
     
-    # 1. Trasforma IP in ottetti
+    # 1. Trasforma IP in ottetti e ottieni le nuove colonne
     if PREPROCESSING_CONFIG["convert_ip_to_octets"]:
         df_processed = _convert_ip_to_octets(df_processed)
     
     # 2. Encoding delle etichette
     label_encoder = LabelEncoder()
     if 'Label' in df_processed.columns:
+        df_processed['Label'] = df_processed['Label'].astype(str)
         df_processed['Label_Encoded'] = label_encoder.fit_transform(df_processed['Label'])
         
         # Salva mapping
         os.makedirs(TRAINING_CONFIG["output_path"], exist_ok=True)
-        mapping = {
-            str(i): label for i, label in enumerate(label_encoder.classes_)
-        }
+        mapping = {str(i): label for i, label in enumerate(label_encoder.classes_)}
         with open(os.path.join(TRAINING_CONFIG["output_path"], "label_mapping.json"), 'w') as f:
             json.dump(mapping, f, indent=2)
+
+    # 3. Gestione dinamica delle feature
+    base_feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df_processed.columns]
+    final_feature_cols = []
+
+    # Aggiungi feature numeriche e gestisci IP
+    for col in base_feature_cols:
+        if PREPROCESSING_CONFIG["convert_ip_to_octets"] and col in DATA_CONFIG["ip_columns"]:
+            # Se IP è stato convertito, aggiungi gli ottetti
+            for i in range(4):
+                final_feature_cols.append(f"{col}_Octet_{i+1}")
+        elif col not in DATA_CONFIG.get("categorical_columns", []):
+            final_feature_cols.append(col)
+
+    # 4. One-Hot Encoding per le feature categoriche
+    if "categorical_columns" in DATA_CONFIG:
+        for col in DATA_CONFIG["categorical_columns"]:
+            if col in df_processed.columns:
+                print(f"🔄 One-hot encoding per la colonna: {col}")
+                dummies = pd.get_dummies(df_processed[col], prefix=col, dummy_na=False)
+                df_processed = pd.concat([df_processed, dummies], axis=1)
+                final_feature_cols.extend(dummies.columns.tolist())
+
+    # 5. Conversione a numerico per tutte le feature finali
+    for col in final_feature_cols:
+        if col in df_processed.columns:
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce').fillna(0)
+        else:
+            print(f"⚠️ Attenzione: la colonna '{col}' non è presente nel DataFrame dopo il processing.")
+
+    # Rimuovi duplicati mantenendo l'ordine
+    final_feature_cols = list(dict.fromkeys(final_feature_cols))
     
-    # 3. Selezione features (normalizzazione spostata al training per evitare leakage)
-    feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df_processed.columns]
-    
-    # Converti in numerico
-    for col in feature_cols:
-        df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce').fillna(0)
-    
-    print(f"✅ Features processate: {len(feature_cols)} colonne")
-    return df_processed, label_encoder
+    print(f"✅ Features processate: {len(final_feature_cols)} colonne finali")
+    return df_processed, label_encoder, final_feature_cols
 
 def _convert_ip_to_octets(df: pd.DataFrame) -> pd.DataFrame:
     """Converte indirizzi IP in ottetti separati."""
@@ -266,19 +290,19 @@ def _ip_to_octet(ip_str: str, octet_index: int) -> int:
         pass
     return 0
 
-def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+def create_time_windows(df: pd.DataFrame, feature_cols: list) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crea finestre temporali per modelli sequenziali.
     
     Args:
         df: DataFrame preprocessato
+        feature_cols: Lista delle colonne da usare come feature
         
     Returns:
         Arrays X (3D) e y per training
     """
     if not PREPROCESSING_CONFIG["use_time_windows"]:
         # Modalità senza finestre temporali
-        feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
         X = df[feature_cols].values
         y = df['Label_Encoded'].values if 'Label_Encoded' in df.columns else np.zeros(len(df))
         return X, y
@@ -294,7 +318,6 @@ def create_time_windows(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     step = PREPROCESSING_CONFIG["step"]
     
     # Features e target
-    feature_cols = [col for col in DATA_CONFIG["feature_columns"] if col in df.columns]
     X_windows, y_windows = [], []
     
     # Crea finestre scorrevoli
@@ -348,10 +371,10 @@ def preprocess_pipeline(
     df = load_and_balance_dataset(data_path, sample_size, balance_strategy, benign_ratio)
     
     # 2. Preprocessa features
-    df_processed, label_encoder = preprocess_features(df)
+    df_processed, label_encoder, feature_cols = preprocess_features(df)
     
     # 3. Crea finestre temporali
-    X, y = create_time_windows(df_processed)
+    X, y = create_time_windows(df_processed, feature_cols)
     
     print(f"✅ Preprocessing completato!")
     print(f"📊 X shape: {X.shape}")

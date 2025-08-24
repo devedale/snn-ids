@@ -33,6 +33,11 @@ DATA_CONFIG = {
         "Fwd IAT Mean", "Bwd IAT Mean",
         "Fwd Header Length", "Bwd Header Length",
         "Average Packet Size", "Fwd Segment Size Avg", "Bwd Segment Size Avg"
+    ],
+
+    # Colonne categoriche da encodare con one-hot
+    "categorical_columns": [
+        "Protocol"
     ]
 }
 

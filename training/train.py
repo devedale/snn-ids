@@ -45,7 +45,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.GRU(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     elif model_type == 'lstm':
         model = tf.keras.Sequential([
@@ -53,7 +53,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.LSTM(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     elif model_type == 'dense':
         model = tf.keras.Sequential([
@@ -63,14 +63,14 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(64, activation=activation),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes, activation='softmax')
         ])
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
     
     # Compilazione
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-    loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
+    loss = 'sparse_categorical_crossentropy'
     model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     
     print(f"✅ Modello {model_type} creato e compilato")
@@ -139,7 +139,18 @@ def train_model(
                 num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
                 input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
                 best_model = build_model(model_type, input_shape, num_classes, params)
-                best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+
+                # Scala i dati completi prima del training finale
+                print("  🚀 Scaling dati completi e re-training modello finale...")
+                scaler = StandardScaler()
+                is_sequence = len(X.shape) == 3
+                if is_sequence:
+                    n_features = X.shape[2]
+                    X_scaled = scaler.fit_transform(X.reshape(-1, n_features)).reshape(X.shape)
+                else:
+                    X_scaled = scaler.fit_transform(X)
+
+                best_model.fit(X_scaled, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
                 
                 print(f"🏆 Nuovo miglior modello: {accuracy:.4f}")
         

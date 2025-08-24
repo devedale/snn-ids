@@ -14,6 +14,7 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, Any, List
 import itertools
+import zipfile
 
 # Import moduli
 sys.path.append(os.path.abspath('.'))
@@ -280,6 +281,26 @@ class SNNIDSBenchmark:
         except Exception as e:
             print(f"❌ Errore durante il salvataggio del summary CSV: {e}")
 
+    def _zip_artifacts(self, directories_to_zip: List[str], zip_filename: str):
+        """Crea un archivio ZIP degli artefatti del benchmark."""
+        print(f"\n📦 Creazione archivio ZIP: {zip_filename}")
+        try:
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for directory in directories_to_zip:
+                    if not os.path.isdir(directory):
+                        print(f"  ⚠️ La directory '{directory}' non esiste, la salto.")
+                        continue
+
+                    for root, _, files in os.walk(directory):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, start=os.path.dirname(directory))
+                            zipf.write(file_path, arcname)
+
+            print(f"✅ Archivio creato con successo.")
+        except Exception as e:
+            print(f"❌ Errore durante la creazione dell'archivio ZIP: {e}")
+
 def main():
     """Entry point principale per l'esecuzione dei benchmark."""
     parser = argparse.ArgumentParser(
@@ -338,6 +359,7 @@ Esempi di utilizzo:
     # Crea istanza del benchmark
     benchmark = SNNIDSBenchmark(config_override)
     
+    exit_code = 1  # Default a 1 (errore)
     try:
         results = None
         if args.smoke_test:
@@ -362,13 +384,22 @@ Esempi di utilizzo:
         
         # Stato di uscita
         final_status = results.get('status', 'error') if 'configuration_tests' not in results else results['summary'].get('status', 'success')
-        return 0 if final_status == 'success' else 1
+        exit_code = 0 if final_status == 'success' else 1
         
     except Exception as e:
         print(f"\n❌ Errore critico durante l'esecuzione del benchmark: {e}")
         import traceback
         traceback.print_exc()
-        return 1
+        exit_code = 1
+
+    finally:
+        # Crea sempre l'archivio ZIP alla fine
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_filename = f"benchmark_run_{ts}.zip"
+        directories_to_zip = ["benchmark_results", "preprocessed_cache"]
+        benchmark._zip_artifacts(directories_to_zip, zip_filename)
+
+    return exit_code
 
 if __name__ == "__main__":
     exit(main())

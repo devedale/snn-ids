@@ -139,7 +139,7 @@ BENCHMARK_CONFIG = {
     
     # Configurazioni per smoke test
     "smoke_test": {
-        "sample_size": 5000,
+        "sample_size": 10000,
         "time_resolutions": ["5s"],
         "hyperparameters": {
             "epochs": [2],

@@ -12,7 +12,7 @@ import os
 
 DATA_CONFIG = {
     # Dataset
-    "dataset_path": "data/cicids/2018",
+    "dataset_path": "data",
     "timestamp_column": "Timestamp",
     "target_column": "Label",
     
@@ -47,6 +47,10 @@ PREPROCESSING_CONFIG = {
     "benign_ratio": 0.5,
     "max_samples_per_class": 100000,
     "min_samples_per_class": 1000,
+
+    # Caching per ottimizzazione
+    "cache_enabled": True,
+    "cache_dir": "preprocessed_cache",
     
     # Finestre temporali per modelli sequenziali
     "use_time_windows": True,

@@ -45,7 +45,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.GRU(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     elif model_type == 'lstm':
         model = tf.keras.Sequential([
@@ -53,7 +53,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.LSTM(units, activation=activation),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     elif model_type == 'dense':
         model = tf.keras.Sequential([
@@ -63,13 +63,15 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(64, activation=activation),
             tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(num_classes, activation='softmax' if num_classes > 2 else 'sigmoid')
+            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
     
     # Compilazione
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    # Per etichette intere (come quelle prodotte da LabelEncoder), usiamo sparse_categorical_crossentropy
+    # Per il caso binario (0/1), binary_crossentropy è corretto con un output di Dense(1, activation='sigmoid')
     loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
     model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     

@@ -18,187 +18,143 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
 
-def load_and_balance_dataset(
-    data_path: str,
-    sample_size: Optional[int] = None,
-    balance_strategy: str = "security",
-    benign_ratio: float = 0.5
-) -> pd.DataFrame:
+def _initialize_dataset_cache(data_path: str, cache_dir: str):
     """
-    Carica e bilancia il dataset CIC-IDS.
-    
-    Args:
-        data_path: Path al dataset
-        sample_size: Numero di campioni totali
-        balance_strategy: Strategia di bilanciamento
-        benign_ratio: Ratio di traffico benigno
-        
-    Returns:
-        DataFrame bilanciato
+    Scansiona i CSV sorgente e crea file di cache separati per BENIGN e ATTACK.
+    Ottimizzato per file di grandi dimensioni utilizzando la lettura a blocchi.
     """
-    print(f"🔄 Caricamento dataset da: {data_path}")
+    print("🗂️ Inizializzazione cache dataset...")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    benign_cache_path = os.path.join(cache_dir, "benign_records.csv")
+    attack_cache_path = os.path.join(cache_dir, "attack_records.csv")
+
+    if os.path.exists(benign_cache_path) and os.path.exists(attack_cache_path):
+        print("✅ Cache già esistente. Salto la creazione.")
+        return
+
+    print(f"⏳ Creazione cache in {cache_dir}. Potrebbe richiedere tempo...")
+
+    # Rimuovi file parziali se esistono
+    if os.path.exists(benign_cache_path): os.remove(benign_cache_path)
+    if os.path.exists(attack_cache_path): os.remove(attack_cache_path)
+
+    header_written_benign = False
+    header_written_attack = False
     
-    # Trova tutti i file CSV
     csv_files = glob.glob(os.path.join(data_path, "*.csv"))
     if not csv_files:
         raise ValueError(f"Nessun file CSV trovato in {data_path}")
-    
-    print(f"📁 Trovati {len(csv_files)} file CSV")
-    
-    # Carica i dati con strategia per includere attacchi
-    all_data = []
-    target_per_file = (sample_size // len(csv_files)) if sample_size else None
-    
+
     for i, file_path in enumerate(csv_files):
-        print(f"  📄 File {i+1}/{len(csv_files)}: {os.path.basename(file_path)}")
-        
-        if target_per_file:
-            # ⚡ STRATEGIA SUPER-EFFICIENTE: Filtra separatamente BENIGN e ATTACCHI
-            print(f"    ⚡ Campionamento intelligente per bilanciare BENIGN/ATTACCHI...")
+        print(f"  📄 Processo file {i+1}/{len(csv_files)}: {os.path.basename(file_path)}")
+        try:
+            # Leggi in blocchi per gestire file di grandi dimensioni
+            chunk_iter = pd.read_csv(file_path, chunksize=100000, low_memory=False)
             
-            # Carica tutto il file
-            df_file = pd.read_csv(file_path)
-            
-            if 'Label' in df_file.columns:
-                # Filtra separatamente (molto più veloce dell'ordinamento)
-                benign_data = df_file[df_file['Label'] == 'BENIGN']
-                attack_data = df_file[df_file['Label'] != 'BENIGN']
+            for chunk in chunk_iter:
+                chunk.columns = chunk.columns.str.strip()
                 
-                # Calcola campioni desiderati (usando benign_ratio dalla config)
-                benign_needed = int(target_per_file * benign_ratio)  # Usa parametro benign_ratio
-                attack_needed = target_per_file - benign_needed  # Resto per attacchi
-                
-                print(f"    📊 Target: {target_per_file} campioni → {benign_needed} BENIGN + {attack_needed} ATTACCHI")
-                
-                # Prendi campioni con shuffle per diversità degli attacchi
-                benign_sample = benign_data.head(benign_needed) if len(benign_data) > 0 else pd.DataFrame()
-                
-                # Shuffle attacchi per massima diversità
-                if len(attack_data) > 0:
-                    attack_sample = attack_data.sample(
-                        n=min(attack_needed, len(attack_data)), 
-                        random_state=42
-                    )
-                else:
-                    attack_sample = pd.DataFrame()
-                
-                # Combina
-                df_file = pd.concat([benign_sample, attack_sample], ignore_index=True)
-                
-                print(f"    📊 Selezionati: {len(benign_sample)} BENIGN + {len(attack_sample)} ATTACCHI")
-            else:
-                # Fallback se non c'è colonna Label
-                df_file = df_file.head(target_per_file)
-        else:
-            df_file = pd.read_csv(file_path)
-        
-        all_data.append(df_file)
-        
-        # Debug attacchi trovati (mostra miglioramento)
-        if 'Label' in df_file.columns:
-            attacks = len(df_file[df_file['Label'] != 'BENIGN'])
-            total_samples = len(df_file)
-            attack_percentage = (attacks / total_samples * 100) if total_samples > 0 else 0
-            if attacks > 0:
-                print(f"    🎯 Trovati {attacks} attacchi su {total_samples} campioni ({attack_percentage:.1f}%)")
-                # Mostra diversità dei tipi di attacco
-                unique_attacks = df_file[df_file['Label'] != 'BENIGN']['Label'].unique()
-                print(f"    🔍 Tipi di attacco: {len(unique_attacks)} diversi ({', '.join(unique_attacks[:3])}{'...' if len(unique_attacks) > 3 else ''})")
-    else:
-                print(f"    📊 Solo traffico BENIGN ({total_samples} campioni)")
-    
-    # Combina tutti i dati
-    df = pd.concat(all_data, ignore_index=True)
-    print(f"📊 Dataset combinato: {len(df)} righe")
-    
-    # Pulizia base
-    df.columns = df.columns.str.strip()
-    df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
-    
-    # Bilanciamento
-    if balance_strategy == "security" and 'Label' in df.columns:
-        df = _balance_cybersecurity(df, sample_size, benign_ratio)
+                if 'Label' not in chunk.columns:
+                    continue
 
-    return df
+                # Pulisci e separa
+                chunk = chunk.replace([np.inf, -np.inf], np.nan).fillna(0)
+                
+                benign_df = chunk[chunk['Label'] == 'BENIGN']
+                attack_df = chunk[chunk['Label'] != 'BENIGN']
 
-def _balance_cybersecurity(df: pd.DataFrame, target_size: Optional[int], benign_ratio: float) -> pd.DataFrame:
-    """Bilancia il dataset per cybersecurity (50% BENIGN, 50% ATTACCHI)."""
-    print("🛡️ Applicazione bilanciamento cybersecurity...")
-    
-    # Separa traffico benigno e maligno
-    benign_df = df[df['Label'] == 'BENIGN']
-    malicious_df = df[df['Label'] != 'BENIGN']
-    
-    print(f"  📊 BENIGN: {len(benign_df):,} campioni")
-    print(f"  🔴 ATTACCHI: {len(malicious_df):,} campioni")
-    
-    if len(malicious_df) == 0:
-        print("  ⚠️ Nessun attacco trovato! Usando solo traffico BENIGN")
-        return df.sample(n=min(target_size or len(df), len(df)))
-    
-    # Calcola dimensioni target
-    if target_size:
-        benign_target = int(target_size * benign_ratio)
-        malicious_target = target_size - benign_target
-    else:
-        benign_target = len(benign_df)
-        malicious_target = len(malicious_df)
-    
-    # Campiona traffico benigno
-    if len(benign_df) >= benign_target:
-        benign_sampled = benign_df.sample(n=benign_target, random_state=42)
-    else:
-        benign_sampled = benign_df
-    
-    # Campiona attacchi mantenendo diversità
-    attack_types = malicious_df['Label'].value_counts()
-    print(f"  🎯 Tipi di attacco trovati: {len(attack_types)}")
-    
-    malicious_sampled = []
-    remaining_budget = malicious_target
-    
-    # Distribuzione equa tra tipi di attacco
-    for attack_type, count in attack_types.items():
-        if remaining_budget <= 0:
-            break
-        
-        attack_data = malicious_df[malicious_df['Label'] == attack_type]
-        samples_to_take = min(count, remaining_budget // max(1, len(attack_types)))
-        
-        if samples_to_take > 0:
-            sampled = attack_data.sample(n=samples_to_take, random_state=42)
-            malicious_sampled.append(sampled)
-            remaining_budget -= samples_to_take
-            print(f"    {attack_type}: {samples_to_take} campioni")
-    
-    # Combina risultati
-    malicious_combined = pd.concat(malicious_sampled, ignore_index=True) if malicious_sampled else pd.DataFrame()
-    balanced_df = pd.concat([benign_sampled, malicious_combined], ignore_index=True)
-    
-    print(f"✅ Dataset bilanciato: {len(balanced_df)} righe")
-    print(f"  📊 BENIGN: {len(benign_sampled)} ({len(benign_sampled)/len(balanced_df)*100:.1f}%)")
-    print(f"  🔴 ATTACCHI: {len(malicious_combined)} ({len(malicious_combined)/len(balanced_df)*100:.1f}%)")
+                # Accoda alla cache
+                if not benign_df.empty:
+                    benign_df.to_csv(benign_cache_path, mode='a', header=not header_written_benign, index=False)
+                    header_written_benign = True
+                
+                if not attack_df.empty:
+                    attack_df.to_csv(attack_cache_path, mode='a', header=not header_written_attack, index=False)
+                    header_written_attack = True
+        except Exception as e:
+            print(f"  ⚠️ Errore durante la lettura di {file_path}: {e}")
+            continue
 
-    # Garanzia minima per classe: necessario per StratifiedKFold
-    # Richiede almeno n_splits campioni per ciascuna classe; duplichiamo con replace se serve (oversampling mirato)
+    print("✅ Cache creata con successo.")
+
+def load_and_balance_dataset(
+    cache_dir: str,
+    sample_size: int,
+    benign_ratio: float
+) -> pd.DataFrame:
+    """
+    Carica un campione bilanciato di dati dai file di cache.
+    Ottimizzato per leggere un numero casuale di righe da file di grandi dimensioni.
+    """
+    print("🔄 Caricamento e bilanciamento del dataset dalla cache...")
+    benign_cache_path = os.path.join(cache_dir, "benign_records.csv")
+    attack_cache_path = os.path.join(cache_dir, "attack_records.csv")
+
+    if not os.path.exists(benign_cache_path) or not os.path.exists(attack_cache_path):
+        raise FileNotFoundError("File di cache non trovati. Eseguire prima _initialize_dataset_cache.")
+
+    # Calcola il numero di campioni necessari da ogni file
+    benign_needed = int(sample_size * benign_ratio)
+    attack_needed = sample_size - benign_needed
+
+    # Campiona in modo efficiente da file di grandi dimensioni
+    print(f"   sampling {benign_needed} benign records...")
+    benign_df = _sample_from_csv(benign_cache_path, benign_needed)
+    
+    print(f"  sampling {attack_needed} attack records...")
+    attack_df = _sample_from_csv(attack_cache_path, attack_needed)
+    
+    print(f"  📊 Selezionati: {len(benign_df)} BENIGN + {len(attack_df)} ATTACCHI")
+
+    # Combina e mescola
+    balanced_df = pd.concat([benign_df, attack_df], ignore_index=True)
+    balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # Garanzia minima per classe per StratifiedKFold
     required_per_class = max(2, TRAINING_CONFIG.get("k_fold_splits", 5))
     counts = balanced_df['Label'].value_counts()
     rare_labels = counts[counts < required_per_class].index.tolist()
     if rare_labels:
         print(f"  ⚠️ Classi con meno di {required_per_class} campioni: {len(rare_labels)}. Avvio oversampling mirato…")
         oversampled_chunks = [balanced_df]
-        rng = np.random.RandomState(42)
         for lbl in rare_labels:
             cur = balanced_df[balanced_df['Label'] == lbl]
             need = required_per_class - len(cur)
-            if len(cur) == 0:
-                continue
-            dup = cur.sample(n=need, replace=True, random_state=42)
-            oversampled_chunks.append(dup)
+            if len(cur) > 0:
+                dup = cur.sample(n=need, replace=True, random_state=42)
+                oversampled_chunks.append(dup)
         balanced_df = pd.concat(oversampled_chunks, ignore_index=True).sample(frac=1.0, random_state=42).reset_index(drop=True)
         print(f"  ✅ Oversampling completato. Nuova dimensione: {len(balanced_df)}")
+
+    print(f"✅ Dataset bilanciato caricato: {len(balanced_df)} righe")
+    return balanced_df
+
+def _sample_from_csv(file_path: str, n_samples: int) -> pd.DataFrame:
+    """Campiona n_samples righe da un file CSV in modo efficiente."""
+    if n_samples == 0:
+        return pd.DataFrame()
     
-    return balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    try:
+        # Conta le righe totali (escludendo l'intestazione)
+        with open(file_path, 'r') as f:
+            num_lines = sum(1 for line in f) - 1
+
+        if num_lines <= 0:
+            return pd.DataFrame()
+
+        # Se vogliamo più campioni di quelli disponibili, prendiamoli tutti
+        if n_samples >= num_lines:
+            return pd.read_csv(file_path)
+
+        # Genera indici di righe casuali da saltare
+        skip_rows = sorted(np.random.choice(range(1, num_lines + 1), num_lines - n_samples, replace=False))
+
+        return pd.read_csv(file_path, skiprows=skip_rows)
+
+    except Exception as e:
+        print(f"Errore durante il campionamento da {file_path}: {e}")
+        return pd.DataFrame()
 
 def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
     """
@@ -335,18 +291,25 @@ def preprocess_pipeline(
     # Usa valori di default dalla config
     data_path = data_path or DATA_CONFIG["dataset_path"]
     sample_size = sample_size or PREPROCESSING_CONFIG["sample_size"]
-    balance_strategy = balance_strategy or PREPROCESSING_CONFIG["balance_strategy"]
     
     print("🚀 Avvio pipeline preprocessing completa")
     print(f"📁 Dataset: {data_path}")
     print(f"📊 Sample size: {sample_size}")
-    print(f"⚖️ Strategia: {balance_strategy}")
-    
-    # 1. Carica e bilancia dataset
-    benign_ratio = PREPROCESSING_CONFIG.get("benign_ratio", 0.5)
-    print(f"📊 Benign ratio: {benign_ratio} ({benign_ratio*100:.0f}% BENIGN, {(1-benign_ratio)*100:.0f}% ATTACCHI)")
-    df = load_and_balance_dataset(data_path, sample_size, balance_strategy, benign_ratio)
-    
+
+    # 1. Inizializza la cache se abilitata
+    if PREPROCESSING_CONFIG.get("cache_enabled", False):
+        cache_dir = PREPROCESSING_CONFIG["cache_dir"]
+        _initialize_dataset_cache(data_path, cache_dir)
+        # Carica i dati dalla cache
+        df = load_and_balance_dataset(
+            cache_dir=cache_dir,
+            sample_size=sample_size,
+            benign_ratio=PREPROCESSING_CONFIG.get("benign_ratio", 0.5)
+        )
+    else:
+        # TODO: implementare una logica di caricamento non basata su cache se necessario
+        raise NotImplementedError("La modalità non-cache non è più supportata. Abilitare la cache in config.py.")
+
     # 2. Preprocessa features
     df_processed, label_encoder = preprocess_features(df)
     
@@ -356,6 +319,7 @@ def preprocess_pipeline(
     print(f"✅ Preprocessing completato!")
     print(f"📊 X shape: {X.shape}")
     print(f"📊 y shape: {y.shape}")
-    print(f"🏷️ Classi: {len(np.unique(y))}")
+    if y.size > 0:
+        print(f"🏷️ Classi: {len(np.unique(y))}")
     
     return X, y, label_encoder

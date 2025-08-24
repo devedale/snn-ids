@@ -175,11 +175,18 @@ def train_model(
     return best_model, training_log, model_path
 
 def _create_param_combinations(hyperparams: Dict) -> list:
-    """Crea tutte le combinazioni di iperparametri."""
+    """
+    Crea tutte le combinazioni di iperparametri, garantendo che i valori siano iterabili.
+    """
     import itertools
     
     keys = hyperparams.keys()
-    values = hyperparams.values()
+    # Assicura che ogni valore sia una lista per evitare errori con `itertools.product`
+    values = [
+        val if isinstance(val, list) else [val]
+        for val in hyperparams.values()
+    ]
+
     combinations = list(itertools.product(*values))
     
     return [dict(zip(keys, combo)) for combo in combinations]

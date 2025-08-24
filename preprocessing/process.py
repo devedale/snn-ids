@@ -18,65 +18,99 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
 
+import multiprocessing
+
+def _process_file_chunk(args):
+    """
+    Funzione helper per processare un singolo file CSV in un processo separato.
+    Crea una sottocartella di cache per il file e separa i record BENIGN/ATTACK.
+    """
+    file_path, cache_dir, delete_source = args
+    file_name = os.path.basename(file_path)
+    file_cache_dir = os.path.join(cache_dir, os.path.splitext(file_name)[0])
+
+    try:
+        os.makedirs(file_cache_dir, exist_ok=True)
+
+        benign_cache_path = os.path.join(file_cache_dir, "benign_records.csv")
+        attack_cache_path = os.path.join(file_cache_dir, "attack_records.csv")
+
+        # Se la cache per questo file esiste già, salta
+        if os.path.exists(benign_cache_path) and os.path.exists(attack_cache_path):
+            print(f"  ✅ Cache per {file_name} già esistente. Salto.")
+            return True
+
+        header_written_benign = False
+        header_written_attack = False
+
+        chunk_iter = pd.read_csv(file_path, chunksize=100000, low_memory=False)
+
+        for chunk in chunk_iter:
+            chunk.columns = chunk.columns.str.strip()
+
+            if 'Label' not in chunk.columns:
+                continue
+
+            chunk = chunk.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+            benign_df = chunk[chunk['Label'] == 'BENIGN']
+            attack_df = chunk[chunk['Label'] != 'BENIGN']
+
+            if not benign_df.empty:
+                benign_df.to_csv(benign_cache_path, mode='a', header=not header_written_benign, index=False)
+                header_written_benign = True
+
+            if not attack_df.empty:
+                attack_df.to_csv(attack_cache_path, mode='a', header=not header_written_attack, index=False)
+                header_written_attack = True
+
+        # Se richiesto, elimina il file sorgente dopo il processamento
+        if delete_source:
+            os.remove(file_path)
+            print(f"  🗑️ File sorgente rimosso: {file_name}")
+
+        return True
+    
+    except Exception as e:
+        print(f"  ⚠️ Errore processando {file_name}: {e}")
+        # Pulisci file parziali in caso di errore
+        if os.path.exists(benign_cache_path): os.remove(benign_cache_path)
+        if os.path.exists(attack_cache_path): os.remove(attack_cache_path)
+        return False
+
 def _initialize_dataset_cache(data_path: str, cache_dir: str):
     """
-    Scansiona i CSV sorgente e crea file di cache separati per BENIGN e ATTACK.
-    Ottimizzato per file di grandi dimensioni utilizzando la lettura a blocchi.
+    Scansiona i CSV sorgente e parallelizza la creazione della cache.
+    Ogni file CSV viene processato in una sottocartella di cache dedicata.
     """
-    print("🗂️ Inizializzazione cache dataset...")
+    print("🗂️  Inizializzazione cache dataset (struttura a cartelle)...")
     os.makedirs(cache_dir, exist_ok=True)
 
-    benign_cache_path = os.path.join(cache_dir, "benign_records.csv")
-    attack_cache_path = os.path.join(cache_dir, "attack_records.csv")
-
-    if os.path.exists(benign_cache_path) and os.path.exists(attack_cache_path):
-        print("✅ Cache già esistente. Salto la creazione.")
-        return
-
-    print(f"⏳ Creazione cache in {cache_dir}. Potrebbe richiedere tempo...")
-
-    # Rimuovi file parziali se esistono
-    if os.path.exists(benign_cache_path): os.remove(benign_cache_path)
-    if os.path.exists(attack_cache_path): os.remove(attack_cache_path)
-
-    header_written_benign = False
-    header_written_attack = False
-    
     csv_files = glob.glob(os.path.join(data_path, "*.csv"))
     if not csv_files:
         raise ValueError(f"Nessun file CSV trovato in {data_path}")
 
-    for i, file_path in enumerate(csv_files):
-        print(f"  📄 Processo file {i+1}/{len(csv_files)}: {os.path.basename(file_path)}")
-        try:
-            # Leggi in blocchi per gestire file di grandi dimensioni
-            chunk_iter = pd.read_csv(file_path, chunksize=100000, low_memory=False)
-            
-            for chunk in chunk_iter:
-                chunk.columns = chunk.columns.str.strip()
-                
-                if 'Label' not in chunk.columns:
-                    continue
+    # Controlla se la cache è completa
+    all_cached = all(
+        os.path.exists(os.path.join(cache_dir, os.path.splitext(os.path.basename(f))[0])) for f in csv_files
+    )
+    if all_cached:
+        print("✅ Cache già completa per tutti i file. Salto la creazione.")
+        return
 
-                # Pulisci e separa
-                chunk = chunk.replace([np.inf, -np.inf], np.nan).fillna(0)
-                
-                benign_df = chunk[chunk['Label'] == 'BENIGN']
-                attack_df = chunk[chunk['Label'] != 'BENIGN']
+    print(f"⏳ Parallelizzazione caching per {len(csv_files)} files...")
 
-                # Accoda alla cache
-                if not benign_df.empty:
-                    benign_df.to_csv(benign_cache_path, mode='a', header=not header_written_benign, index=False)
-                    header_written_benign = True
-                
-                if not attack_df.empty:
-                    attack_df.to_csv(attack_cache_path, mode='a', header=not header_written_attack, index=False)
-                    header_written_attack = True
-        except Exception as e:
-            print(f"  ⚠️ Errore durante la lettura di {file_path}: {e}")
-            continue
+    num_processes = PREPROCESSING_CONFIG.get("parallel_processes", 1)
+    delete_source = PREPROCESSING_CONFIG.get("delete_processed_files", False)
 
-    print("✅ Cache creata con successo.")
+    # Prepara gli argomenti per il pool di processi
+    pool_args = [(file_path, cache_dir, delete_source) for file_path in csv_files]
+
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results = pool.map(_process_file_chunk, pool_args)
+
+    successful_files = sum(1 for r in results if r)
+    print(f"✅ Caching completato. {successful_files}/{len(csv_files)} file processati con successo.")
 
 def load_and_balance_dataset(
     cache_dir: str,
@@ -84,26 +118,55 @@ def load_and_balance_dataset(
     benign_ratio: float
 ) -> pd.DataFrame:
     """
-    Carica un campione bilanciato di dati dai file di cache.
+    Carica un campione bilanciato aggregando i dati da tutte le sottocartelle di cache.
     Ottimizzato per leggere un numero casuale di righe da file di grandi dimensioni.
     """
-    print("🔄 Caricamento e bilanciamento del dataset dalla cache...")
-    benign_cache_path = os.path.join(cache_dir, "benign_records.csv")
-    attack_cache_path = os.path.join(cache_dir, "attack_records.csv")
+    print("🔄 Aggregazione e bilanciamento del dataset dalla cache a cartelle...")
 
-    if not os.path.exists(benign_cache_path) or not os.path.exists(attack_cache_path):
-        raise FileNotFoundError("File di cache non trovati. Eseguire prima _initialize_dataset_cache.")
+    # Trova tutti i file di cache benign e attack nelle sottocartelle
+    benign_files = glob.glob(os.path.join(cache_dir, "*", "benign_records.csv"))
+    attack_files = glob.glob(os.path.join(cache_dir, "*", "attack_records.csv"))
 
-    # Calcola il numero di campioni necessari da ogni file
+    if not benign_files or not attack_files:
+        raise FileNotFoundError("Nessun file di cache trovato. Eseguire prima _initialize_dataset_cache.")
+
+    # Funzione helper per caricare e concatenare i file
+    def _load_files(file_list):
+        chunks = [pd.read_csv(f, low_memory=False) for f in file_list]
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True)
+
+    print(f"  📂 Trovati {len(benign_files)} file benign e {len(attack_files)} file attack.")
+
+    # Carica tutti i dati (per datasets molto grandi, questo potrebbe essere ottimizzato)
+    # Per ora, l'approccio è semplice: carica tutto e poi campiona.
+    full_benign_df = _load_files(benign_files)
+    full_attack_df = _load_files(attack_files)
+
+    if full_benign_df.empty or full_attack_df.empty:
+        raise ValueError("Uno dei set di dati (BENIGN o ATTACK) è vuoto nella cache.")
+
+    # Calcola il numero di campioni necessari
     benign_needed = int(sample_size * benign_ratio)
     attack_needed = sample_size - benign_needed
 
-    # Campiona in modo efficiente da file di grandi dimensioni
-    print(f"   sampling {benign_needed} benign records...")
-    benign_df = _sample_from_csv(benign_cache_path, benign_needed)
+    # Campiona dai DataFrame aggregati
+    print(f"  sampling {benign_needed} record benign...")
+    benign_df = resample(
+        full_benign_df,
+        n_samples=min(benign_needed, len(full_benign_df)),
+        random_state=42,
+        replace=False
+    )
     
-    print(f"  sampling {attack_needed} attack records...")
-    attack_df = _sample_from_csv(attack_cache_path, attack_needed)
+    print(f"  sampling {attack_needed} record attack...")
+    attack_df = resample(
+        full_attack_df,
+        n_samples=min(attack_needed, len(full_attack_df)),
+        random_state=42,
+        replace=False
+    )
     
     print(f"  📊 Selezionati: {len(benign_df)} BENIGN + {len(attack_df)} ATTACCHI")
 

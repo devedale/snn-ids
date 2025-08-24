@@ -52,7 +52,7 @@ PREPROCESSING_CONFIG = {
     "cache_enabled": True,
     "cache_dir": "preprocessed_cache",
     "delete_processed_files": False,  # Se True, elimina i file sorgente dopo la cache
-    "parallel_processes": 4,  # Numero di processi per parallelizzare il caching
+    "parallel_processes": 2,  # Numero di processi per parallelizzare il caching (ridotto per evitare OOM)
     
     # Finestre temporali per modelli sequenziali
     "use_time_windows": True,

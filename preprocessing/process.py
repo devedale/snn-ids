@@ -130,43 +130,113 @@ def load_and_balance_dataset(
     if not benign_files or not attack_files:
         raise FileNotFoundError("Nessun file di cache trovato. Eseguire prima _initialize_dataset_cache.")
 
-    # Funzione helper per caricare e concatenare i file
-    def _load_files(file_list):
-        chunks = [pd.read_csv(f, low_memory=False) for f in file_list]
-        if not chunks:
+    # Funzione per campionare attack files diversificando i tipi di attacco
+    def _sample_attack_files(attack_files, target_samples):
+        if not attack_files or target_samples <= 0:
             return pd.DataFrame()
-        return pd.concat(chunks, ignore_index=True)
+        
+        print(f"    🎯 Strategia attack: diversificare i tipi di attacco")
+        
+        # Analizza ogni file per trovare i tipi di attacco
+        attack_types_by_file = {}
+        total_attack_types = set()
+        
+        for file_path in attack_files:
+            try:
+                # Carica solo le prime righe per analizzare i tipi di attacco
+                df_sample = pd.read_csv(file_path, nrows=1000, low_memory=False)
+                if 'Label' in df_sample.columns:
+                    file_attack_types = set(df_sample['Label'].unique())
+                    attack_types_by_file[file_path] = file_attack_types
+                    total_attack_types.update(file_attack_types)
+                    print(f"    🏷️  {os.path.basename(file_path)}: {len(file_attack_types)} tipi di attacco")
+            except Exception as e:
+                print(f"    ⚠️ Errore nell'analizzare {file_path}: {e}")
+                continue
+        
+        print(f"    🌐 Trovati {len(total_attack_types)} tipi di attacco totali")
+        
+        # Strategia: prendi campioni da ogni file per massimizzare la diversità
+        samples_per_file = max(1, target_samples // len(attack_files))
+        remaining_samples = target_samples
+        sampled_chunks = []
+        
+        for file_path in attack_files:
+            if remaining_samples <= 0:
+                break
+                
+            samples_from_file = min(samples_per_file, remaining_samples)
+            try:
+                df = pd.read_csv(file_path, low_memory=False)
+                if len(df) > samples_from_file:
+                    df_sampled = df.sample(n=samples_from_file, random_state=42)
+                else:
+                    df_sampled = df
+                sampled_chunks.append(df_sampled)
+                remaining_samples -= len(df_sampled)
+                print(f"    ⚔️  Campionati {len(df_sampled)} attack da {os.path.basename(file_path)}")
+            except Exception as e:
+                print(f"    ⚠️ Errore nel campionare da {file_path}: {e}")
+                continue
+        
+        if not sampled_chunks:
+            return pd.DataFrame()
+        
+        return pd.concat(sampled_chunks, ignore_index=True)
+    
+    # Funzione per campionare benign files (campionamento casuale semplice)
+    def _sample_benign_files(benign_files, target_samples):
+        if not benign_files or target_samples <= 0:
+            return pd.DataFrame()
+        
+        print(f"    🎯 Strategia benign: campionamento casuale uniforme")
+        
+        # Campionamento uniforme da tutti i file benign
+        samples_per_file = max(1, target_samples // len(benign_files))
+        remaining_samples = target_samples
+        sampled_chunks = []
+        
+        for file_path in benign_files:
+            if remaining_samples <= 0:
+                break
+                
+            samples_from_file = min(samples_per_file, remaining_samples)
+            try:
+                df = pd.read_csv(file_path, low_memory=False)
+                if len(df) > samples_from_file:
+                    df_sampled = df.sample(n=samples_from_file, random_state=42)
+                else:
+                    df_sampled = df
+                sampled_chunks.append(df_sampled)
+                remaining_samples -= len(df_sampled)
+                print(f"    ✅ Campionati {len(df_sampled)} benign da {os.path.basename(file_path)}")
+            except Exception as e:
+                print(f"    ⚠️ Errore nel campionare da {file_path}: {e}")
+                continue
+        
+        if not sampled_chunks:
+            return pd.DataFrame()
+        
+        return pd.concat(sampled_chunks, ignore_index=True)
 
     print(f"  📂 Trovati {len(benign_files)} file benign e {len(attack_files)} file attack.")
-
-    # Carica tutti i dati (per datasets molto grandi, questo potrebbe essere ottimizzato)
-    # Per ora, l'approccio è semplice: carica tutto e poi campiona.
-    full_benign_df = _load_files(benign_files)
-    full_attack_df = _load_files(attack_files)
-
-    if full_benign_df.empty or full_attack_df.empty:
-        raise ValueError("Uno dei set di dati (BENIGN o ATTACK) è vuoto nella cache.")
 
     # Calcola il numero di campioni necessari
     benign_needed = int(sample_size * benign_ratio)
     attack_needed = sample_size - benign_needed
 
-    # Campiona dai DataFrame aggregati
-    print(f"  sampling {benign_needed} record benign...")
-    benign_df = resample(
-        full_benign_df,
-        n_samples=min(benign_needed, len(full_benign_df)),
-        random_state=42,
-        replace=False
-    )
+    print(f"  🎯 Campionamento intelligente: {benign_needed} benign + {attack_needed} attack")
     
-    print(f"  sampling {attack_needed} record attack...")
-    attack_df = resample(
-        full_attack_df,
-        n_samples=min(attack_needed, len(full_attack_df)),
-        random_state=42,
-        replace=False
-    )
+    # Campiona usando strategie ottimizzate per tipo
+    full_benign_df = _sample_benign_files(benign_files, benign_needed)
+    full_attack_df = _sample_attack_files(attack_files, attack_needed)
+
+    if full_benign_df.empty or full_attack_df.empty:
+        raise ValueError("Uno dei set di dati (BENIGN o ATTACK) è vuoto nella cache.")
+
+    # I dati sono già campionati alla dimensione corretta
+    benign_df = full_benign_df
+    attack_df = full_attack_df
     
     print(f"  📊 Selezionati: {len(benign_df)} BENIGN + {len(attack_df)} ATTACCHI")
 

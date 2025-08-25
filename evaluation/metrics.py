@@ -27,7 +27,8 @@ def evaluate_model_comprehensive(
     X_test: np.ndarray,
     y_test: np.ndarray,
     class_names: List[str],
-    output_dir: str = "evaluation_results"
+    output_dir: str = "evaluation_results",
+    model_config: Dict = None
 ) -> Dict[str, Any]:
     """
     Valutazione completa di un modello con metriche cybersecurity.
@@ -38,6 +39,7 @@ def evaluate_model_comprehensive(
         y_test: Labels di test
         class_names: Nomi delle classi
         output_dir: Directory output
+        model_config: Configurazione del modello (iperparametri, ecc.)
         
     Returns:
         Dizionario con tutte le metriche
@@ -67,7 +69,7 @@ def evaluate_model_comprehensive(
     
     # Visualizzazioni
     viz_paths = _create_visualizations(
-        y_test, y_pred, y_pred_proba, cm, class_names, output_dir
+        y_test, y_pred, y_pred_proba, cm, class_names, output_dir, model_config
     )
     
     # Report completo
@@ -174,12 +176,16 @@ def _create_visualizations(
     y_pred_proba: np.ndarray,
     cm: np.ndarray,
     class_names: List[str],
-    output_dir: str
+    output_dir: str,
+    model_config: Dict = None
 ) -> List[str]:
     """Crea visualizzazioni PNG."""
     
     # Assicurati che la directory esista
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Genera stringa con iperparametri per i titoli
+    hyperparams_str = _format_hyperparameters_for_title(model_config)
     
     viz_paths = []
     
@@ -195,8 +201,10 @@ def _create_visualizations(
                 annot_kws={'size': 10, 'weight': 'bold'},
                 cbar_kws={'label': 'Numero di Campioni'})
     
-    plt.title('Matrice di Confusione - Dettagliata\n(Righe=Reale, Colonne=Predizione)', 
-              fontsize=16, fontweight='bold', pad=20)
+    title = 'Matrice di Confusione - Dettagliata\n(Righe=Reale, Colonne=Predizione)'
+    if hyperparams_str:
+        title += f'\n{hyperparams_str}'
+    plt.title(title, fontsize=14, fontweight='bold', pad=20)
     plt.xlabel('Predizione', fontsize=12, fontweight='bold')
     plt.ylabel('Classe Reale', fontsize=12, fontweight='bold')
     
@@ -224,7 +232,10 @@ def _create_visualizations(
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Reds',
                 xticklabels=['BENIGN', 'ATTACCO'], yticklabels=['BENIGN', 'ATTACCO'])
-    plt.title('Matrice di Confusione - Cybersecurity Focus', fontsize=16, fontweight='bold')
+    title_binary = 'Matrice di Confusione - Cybersecurity Focus\n(BENIGN vs ATTACCHI)'
+    if hyperparams_str:
+        title_binary += f'\n{hyperparams_str}'
+    plt.title(title_binary, fontsize=12, fontweight='bold')
     plt.xlabel('Predizione', fontsize=12)
     plt.ylabel('Reale', fontsize=12)
     plt.tight_layout()
@@ -248,7 +259,10 @@ def _create_visualizations(
     plt.figure(figsize=(12, 6))
     bars = plt.bar(range(len(class_names)), class_accuracies, 
                    color=['green' if i == benign_idx else 'red' for i in range(len(class_names))])
-    plt.title('Accuracy per Classe di Traffico', fontsize=16, fontweight='bold')
+    title_acc = 'Accuracy per Classe di Traffico'
+    if hyperparams_str:
+        title_acc += f'\n{hyperparams_str}'
+    plt.title(title_acc, fontsize=14, fontweight='bold')
     plt.xlabel('Classe', fontsize=12)
     plt.ylabel('Accuracy', fontsize=12)
     plt.xticks(range(len(class_names)), class_names, rotation=45, ha='right')
@@ -319,6 +333,49 @@ def _create_visualizations(
         print(f"  ⚠️ Skipping ROC: dataset piccolo ({len(y_true)} campioni) o binario")
     
     return viz_paths
+
+def _format_hyperparameters_for_title(model_config: Dict = None) -> str:
+    """Formatta gli iperparametri per i titoli delle visualizzazioni."""
+    if not model_config:
+        return ""
+    
+    hyperparams = model_config.get('hyperparameters', {})
+    model_type = model_config.get('model_type', 'Unknown')
+    
+    # Estrai parametri rilevanti
+    params_str = []
+    params_str.append(f"Model: {model_type.upper()}")
+    
+    if 'epochs' in hyperparams:
+        epochs = hyperparams['epochs'][0] if isinstance(hyperparams['epochs'], list) else hyperparams['epochs']
+        params_str.append(f"Epochs: {epochs}")
+    
+    if 'batch_size' in hyperparams:
+        batch_size = hyperparams['batch_size'][0] if isinstance(hyperparams['batch_size'], list) else hyperparams['batch_size']
+        params_str.append(f"Batch: {batch_size}")
+    
+    if 'learning_rate' in hyperparams:
+        lr = hyperparams['learning_rate'][0] if isinstance(hyperparams['learning_rate'], list) else hyperparams['learning_rate']
+        params_str.append(f"LR: {lr}")
+    
+    if 'activation' in hyperparams:
+        activation = hyperparams['activation'][0] if isinstance(hyperparams['activation'], list) else hyperparams['activation']
+        params_str.append(f"Act: {activation}")
+    
+    # Parametri specifici del modello
+    if model_type.lower() == 'gru' and 'gru_units' in hyperparams:
+        units = hyperparams['gru_units'][0] if isinstance(hyperparams['gru_units'], list) else hyperparams['gru_units']
+        params_str.append(f"Units: {units}")
+    elif model_type.lower() == 'lstm' and 'lstm_units' in hyperparams:
+        units = hyperparams['lstm_units'][0] if isinstance(hyperparams['lstm_units'], list) else hyperparams['lstm_units']
+        params_str.append(f"Units: {units}")
+    
+    if 'dropout' in hyperparams:
+        dropout = hyperparams['dropout'][0] if isinstance(hyperparams['dropout'], list) else hyperparams['dropout']
+        if dropout > 0:
+            params_str.append(f"Dropout: {dropout}")
+    
+    return " | ".join(params_str)
 
 def create_benchmark_comparison(
     results_list: List[Dict],

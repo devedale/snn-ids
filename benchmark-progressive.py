@@ -91,6 +91,7 @@ class ProgressiveBenchmark:
         # Genera e salva top 10 modelli
         self._save_top_models_summary(final_report)
         
+
         print(f"\n{'='*60}")
         print(f"🎉 OTTIMIZZAZIONE PROGRESSIVA COMPLETATA!")
         print(f"⏱️  Tempo totale: {total_time:.2f}s")

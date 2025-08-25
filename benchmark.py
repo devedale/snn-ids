@@ -83,7 +83,7 @@ class SNNIDSBenchmark:
         # --- 3. Valutazione ---
         print("\n📊 VALUTAZIONE")
         try:
-            eval_result = self._run_evaluation(model, X, y, label_encoder, test_config['model_type'])
+            eval_result = self._run_evaluation(model, X, y, label_encoder, test_config)
             print("✅ Valutazione completata.")
         except Exception as e:
             print(f"❌ Errore nella valutazione: {e}")
@@ -189,7 +189,7 @@ class SNNIDSBenchmark:
             print(f"🏆 Miglior modello: {summary['best_model']['config']['model_type']} con accuratezza {summary['best_model']['best_accuracy']:.4f}")
         return final_result
 
-    def _run_evaluation(self, model, X, y, label_encoder, model_type):
+    def _run_evaluation(self, model, X, y, label_encoder, test_config):
         """Esegue valutazione completa con visualizzazioni."""
         from sklearn.model_selection import train_test_split
         
@@ -212,13 +212,56 @@ class SNNIDSBenchmark:
 
         class_names = label_encoder.classes_.tolist() if hasattr(label_encoder, 'classes_') else []
 
+        # Crea nome directory descrittivo con iperparametri
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        eval_dir = os.path.join("benchmark_results", f"{timestamp}_{model_type}_evaluation", "visualizations")
+        descriptive_name = self._generate_descriptive_folder_name(test_config, timestamp)
+        eval_dir = os.path.join("benchmark_results", descriptive_name, "visualizations")
 
         evaluation_report = evaluate_model_comprehensive(
-            model=model, X_test=X_test, y_test=y_test, class_names=class_names, output_dir=eval_dir
+            model=model, X_test=X_test, y_test=y_test, class_names=class_names, 
+            output_dir=eval_dir, model_config=test_config
         )
         return {'status': 'success', 'evaluation_dir': eval_dir, 'report': evaluation_report}
+
+    def _generate_descriptive_folder_name(self, test_config: Dict, timestamp: str) -> str:
+        """Genera un nome di cartella descrittivo con tutti i parametri."""
+        model_type = test_config.get('model_type', 'unknown')
+        hyperparams = test_config.get('hyperparameters', {})
+        
+        # Componenti del nome
+        parts = [timestamp, model_type.upper()]
+        
+        # Aggiungi parametri chiave
+        if 'epochs' in hyperparams:
+            epochs = hyperparams['epochs'][0] if isinstance(hyperparams['epochs'], list) else hyperparams['epochs']
+            parts.append(f"ep{epochs}")
+        
+        if 'batch_size' in hyperparams:
+            batch_size = hyperparams['batch_size'][0] if isinstance(hyperparams['batch_size'], list) else hyperparams['batch_size']
+            parts.append(f"bs{batch_size}")
+        
+        if 'learning_rate' in hyperparams:
+            lr = hyperparams['learning_rate'][0] if isinstance(hyperparams['learning_rate'], list) else hyperparams['learning_rate']
+            parts.append(f"lr{lr}")
+        
+        if 'activation' in hyperparams:
+            activation = hyperparams['activation'][0] if isinstance(hyperparams['activation'], list) else hyperparams['activation']
+            parts.append(f"act{activation}")
+        
+        # Parametri specifici del modello
+        if model_type.lower() == 'gru' and 'gru_units' in hyperparams:
+            units = hyperparams['gru_units'][0] if isinstance(hyperparams['gru_units'], list) else hyperparams['gru_units']
+            parts.append(f"units{units}")
+        elif model_type.lower() == 'lstm' and 'lstm_units' in hyperparams:
+            units = hyperparams['lstm_units'][0] if isinstance(hyperparams['lstm_units'], list) else hyperparams['lstm_units']
+            parts.append(f"units{units}")
+        
+        if 'dropout' in hyperparams:
+            dropout = hyperparams['dropout'][0] if isinstance(hyperparams['dropout'], list) else hyperparams['dropout']
+            if dropout > 0:
+                parts.append(f"drop{dropout}")
+        
+        return "_".join(parts)
 
     def save_results(self, results: Dict[str, Any], output_dir: str = "benchmark_results"):
         """Salva i risultati del benchmark in JSON e CSV."""
@@ -410,6 +453,8 @@ Esempi di utilizzo:
         benchmark._zip_artifacts(directories_to_zip, zip_filename)
 
     return exit_code
+
+
 
 if __name__ == "__main__":
     exit(main())

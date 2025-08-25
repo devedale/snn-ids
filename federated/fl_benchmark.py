@@ -74,7 +74,7 @@ def run_fl_best_config(sample_size: int = None, data_path: str = None) -> Dict[s
 
     # Costruisci modello base per inizializzazione pesi
     input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
-    num_classes = max(len(np.unique(y)), np.max(y) + 1)
+    num_classes = max(len(np.unique(y)), int(np.max(y)) + 1)
 
     builder = _build_keras_builder(model_type, params)
     base_model = builder(input_shape, num_classes)
@@ -97,7 +97,8 @@ def run_fl_best_config(sample_size: int = None, data_path: str = None) -> Dict[s
             updated = client.local_train(
                 lambda inp, nc: builder(inp, nc),
                 server.global_weights,
-                {"local_epochs": local_epochs, "batch_size": batch_size}
+                {"local_epochs": local_epochs, "batch_size": batch_size},
+                num_classes
             )
             client_updates.append(updated)
 

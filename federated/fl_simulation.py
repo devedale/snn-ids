@@ -49,13 +49,12 @@ class FedClient:
         self.client_id = client_id
         self.X, self.y = local_data
 
-    def local_train(self, build_model_fn, base_weights: List[np.ndarray], params: Dict[str, Any]) -> List[np.ndarray]:
+    def local_train(self, build_model_fn, base_weights: List[np.ndarray], params: Dict[str, Any], num_classes: int) -> List[np.ndarray]:
         """Esegue un brevissimo fine-tuning locale e restituisce i pesi aggiornati."""
         import tensorflow as tf
 
         # Ricostruisci il modello coerente con i pesi globali
         input_shape = self.X.shape[1:] if len(self.X.shape) > 2 else (self.X.shape[1],)
-        num_classes = max(len(np.unique(self.y)), np.max(self.y) + 1)
         model = build_model_fn(input_shape, num_classes)
         model.set_weights(base_weights)
 

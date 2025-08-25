@@ -534,7 +534,15 @@ def preprocess_pipeline(
     # 1. Inizializza la cache se abilitata
     if PREPROCESSING_CONFIG.get("cache_enabled", False):
         cache_dir = PREPROCESSING_CONFIG["cache_dir"]
-        _initialize_dataset_cache(data_path, cache_dir)
+
+        # Controlla se la cache è utilizzabile prima di provare a inizializzarla
+        benign_files = glob.glob(os.path.join(cache_dir, "*", "benign_records.csv"))
+        attack_files = glob.glob(os.path.join(cache_dir, "*", "attack_records.csv"))
+
+        if not benign_files or not attack_files:
+            print("Cache incompleta o non trovata. Tentativo di inizializzazione dai file CSV...")
+            _initialize_dataset_cache(data_path, cache_dir)
+
         # Carica i dati dalla cache
         df = load_and_balance_dataset(
             cache_dir=cache_dir,

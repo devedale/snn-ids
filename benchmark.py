@@ -33,8 +33,11 @@ Examples of use:
     p_mlp = subparsers.add_parser('mlp-analysis', help='Run the deep MLP analysis.')
     p_mlp.add_argument('--sample-size', type=int)
 
+    p_progressive = subparsers.add_parser('progressive', help='Run benchmark with progressive data samples.')
+    p_progressive.add_argument('--sample-size', type=int)
+    p_progressive.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'])
+
     # Placeholders for other modes
-    subparsers.add_parser('progressive', help='(Not yet implemented)')
     subparsers.add_parser('best-config', help='(Not yet implemented)')
     subparsers.add_parser('federated', help='(Not yet implemented)')
     
@@ -50,6 +53,11 @@ Examples of use:
     elif args.mode == 'mlp-analysis':
         workflows.run_mlp_deep_analysis(
             sample_size=args.sample_size
+        )
+    elif args.mode == 'progressive':
+        workflows.run_progressive(
+            sample_size=args.sample_size,
+            models_to_test=args.models
         )
     else:
         print(f"Mode '{args.mode}' is not yet implemented.")

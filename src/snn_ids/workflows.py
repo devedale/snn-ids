@@ -22,19 +22,139 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 from config import *
 from snn_ids.preprocessing.process import preprocess_pipeline
 from snn_ids.training.train import train_model, build_model, train_model_with_per_class_loss
-from snn_ids.evaluation.metrics import evaluate_model_comprehensive
+from snn_ids.evaluation.metrics import evaluate_model_comprehensive, create_benchmark_summary_csv
 from snn_ids.federated.fl_simulation import FedAvgServer, FedClient, split_dataset_iid
 from snn_ids.federated.he import HEContext
 
-# ... (helper functions from before)
+# Define hyperparameter sets from config
+SMOKE_TEST_HYPERPARAMETERS = {
+    'dense': {**TRAINING_CONFIG['hyperparameters'], **BENCHMARK_CONFIG['smoke_test']['hyperparameters']}
+}
+FULL_BENCHMARK_HYPERPARAMETERS = {
+    'dense': TRAINING_CONFIG['hyperparameters'],
+    'gru': TRAINING_CONFIG['hyperparameters'],
+    'lstm': TRAINING_CONFIG['hyperparameters'],
+}
 
 def run_centralized(smoke_test=False, full_benchmark=False, sample_size=None, models_to_test=None):
-    # ... (implementation from before)
-    pass
+    """
+    Runs a centralized training and evaluation benchmark.
+    """
+    print("🚀 Starting centralized benchmark...")
+
+    # Determine models and hyperparameters
+    if smoke_test:
+        print("🔥 Running in smoke test mode.")
+        models_to_test = models_to_test or ['dense']
+        hyperparameters = {'dense': SMOKE_TEST_HYPERPARAMETERS['dense']}
+        sample_size = sample_size or 1000
+    elif full_benchmark:
+        print("🚀 Running in full benchmark mode.")
+        models_to_test = models_to_test or ['dense', 'gru', 'lstm']
+        hyperparameters = FULL_BENCHMARK_HYPERPARAMETERS
+        sample_size = sample_size or PREPROCESSING_CONFIG['sample_size']
+    else:
+        print("Standard run...")
+        models_to_test = models_to_test or ['dense']
+        hyperparameters = {'dense': FULL_BENCHMARK_HYPERPARAMETERS['dense']}
+        sample_size = sample_size or 10000
+
+    # Load and preprocess data
+    data_path = DATA_CONFIG['dataset_path']
+    X, y, label_encoder = preprocess_pipeline(data_path=data_path, sample_size=sample_size)
+
+    all_results = []
+
+    # Create a main output directory for the benchmark
+    main_output_dir = os.path.join("benchmark_results", f"centralized_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(main_output_dir, exist_ok=True)
+
+    for model_type in models_to_test:
+        print(f"\n--- Training and evaluating model: {model_type.upper()} ---")
+        model_hyperparams = hyperparameters[model_type]
+
+        model, (X_train, X_test, y_train, y_test) = train_model(
+            X, y, model_type, model_hyperparams, test_size=0.2, random_state=42
+        )
+
+        model_config = {
+            'model_type': model_type,
+            'hyperparameters': model_hyperparams,
+            'sample_size': sample_size
+        }
+
+        # Create a specific output directory for this model's artifacts
+        model_output_dir = os.path.join(main_output_dir, model_type)
+        os.makedirs(model_output_dir, exist_ok=True)
+
+        report = evaluate_model_comprehensive(
+            model, X_test, y_test, label_encoder.classes_,
+            output_dir=os.path.join(model_output_dir, 'visualizations'),
+            model_config=model_config
+        )
+        all_results.append(report)
+
+    # After all models are evaluated, create a summary CSV
+    if len(all_results) > 1:
+        create_benchmark_summary_csv(all_results, main_output_dir)
+
+    print("\n✅ Centralized benchmark finished.")
+
 
 def run_progressive(sample_size: int = None, models_to_test: List[str] = None):
-    # ... (implementation from before)
-    pass
+    """
+    Runs a benchmark with progressively larger data samples.
+    """
+    print("🚀 Starting progressive benchmark...")
+
+    models_to_test = models_to_test or ['dense']
+    sample_fractions = [0.1, 0.2, 0.5, 1.0]
+
+    # Load full dataset once
+    data_path = DATA_CONFIG['dataset_path']
+    full_sample_size = sample_size or PREPROCESSING_CONFIG['sample_size']
+    X_full, y_full, label_encoder = preprocess_pipeline(data_path=data_path, sample_size=full_sample_size)
+
+    all_results = []
+    main_output_dir = os.path.join("benchmark_results", f"progressive_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(main_output_dir, exist_ok=True)
+
+    for model_type in models_to_test:
+        for fraction in sample_fractions:
+            current_sample_size = int(len(X_full) * fraction)
+            print(f"\n--- Running model {model_type.upper()} with {fraction*100:.0f}% of data ({current_sample_size} samples) ---")
+
+            # Sub-sample the data
+            indices = np.random.choice(len(X_full), current_sample_size, replace=False)
+            X, y = X_full[indices], y_full[indices]
+
+            model_hyperparams = FULL_BENCHMARK_HYPERPARAMETERS[model_type]
+
+            model, (X_train, X_test, y_train, y_test) = train_model(
+                X, y, model_type, model_hyperparams, test_size=0.2, random_state=42
+            )
+
+            model_config = {
+                'model_type': f"{model_type}_frac{fraction*100:.0f}",
+                'hyperparameters': model_hyperparams,
+                'sample_size': current_sample_size,
+                'data_fraction': fraction
+            }
+
+            model_output_dir = os.path.join(main_output_dir, f"{model_type}_frac{fraction*100:.0f}")
+            os.makedirs(model_output_dir, exist_ok=True)
+
+            report = evaluate_model_comprehensive(
+                model, X_test, y_test, label_encoder.classes_,
+                output_dir=os.path.join(model_output_dir, 'visualizations'),
+                model_config=model_config
+            )
+            all_results.append(report)
+
+    # Create summary CSV for the entire progressive benchmark
+    create_benchmark_summary_csv(all_results, main_output_dir)
+
+    print("\n✅ Progressive benchmark finished.")
 
 def run_best_config_tuning(sample_size: int = None):
     # ... (implementation from before)

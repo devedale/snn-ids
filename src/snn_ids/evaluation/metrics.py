@@ -21,6 +21,7 @@ import json
 from datetime import datetime
 from typing import Tuple, Dict, Any, Optional, List
 import tensorflow as tf
+import pandas as pd
 
 def evaluate_model_comprehensive(
     model: tf.keras.Model,
@@ -57,7 +58,8 @@ def evaluate_model_comprehensive(
     
     # Metriche base
     accuracy = accuracy_score(y_test, y_pred)
-    precision, recall, f1, support = precision_recall_fscore_support(y_test, y_pred, average=None)
+    # Usa classification_report per metriche dettagliate
+    report_dict = classification_report(y_test, y_pred, target_names=class_names, output_dict=True)
     
     print(f"  ✅ Accuratezza: {accuracy:.4f}")
     
@@ -69,20 +71,16 @@ def evaluate_model_comprehensive(
     
     # Visualizzazioni
     viz_paths = _create_visualizations(
-        y_test, y_pred, y_pred_proba, cm, class_names, output_dir, model_config
+        y_test, y_pred, y_pred_proba, cm, class_names, report_dict, output_dir, model_config
     )
     
     # Report completo
     report = {
-        'basic_metrics': {
-            'accuracy': float(accuracy),
-            'precision_per_class': precision.tolist(),
-            'recall_per_class': recall.tolist(),
-            'f1_per_class': f1.tolist(),
-            'support_per_class': support.tolist()
-        },
+        'model_config': model_config,
+        'classification_report': report_dict,
         'cybersecurity_metrics': cyber_metrics,
         'confusion_matrix': cm.tolist(),
+        'binary_confusion_matrix': cyber_metrics.get('binary_confusion_matrix'),
         'class_names': class_names,
         'visualizations': viz_paths
     }
@@ -176,6 +174,7 @@ def _create_visualizations(
     y_pred_proba: np.ndarray,
     cm: np.ndarray,
     class_names: List[str],
+    report_dict: Dict,
     output_dir: str,
     model_config: Dict = None
 ) -> List[str]:
@@ -190,30 +189,20 @@ def _create_visualizations(
     viz_paths = []
     
     # 1. Matrice di Confusione Dettagliata
-    num_classes = len(class_names)
-    
-    # Dimensioni fisse e leggibili
     plt.figure(figsize=(14, 12))
-    
-    # Heatmap semplice e chiara
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=class_names, yticklabels=class_names,
                 annot_kws={'size': 10, 'weight': 'bold'},
                 cbar_kws={'label': 'Numero di Campioni'})
-    
     title = 'Matrice di Confusione - Dettagliata\n(Righe=Reale, Colonne=Predizione)'
     if hyperparams_str:
         title += f'\n{hyperparams_str}'
     plt.title(title, fontsize=14, fontweight='bold', pad=20)
     plt.xlabel('Predizione', fontsize=12, fontweight='bold')
     plt.ylabel('Classe Reale', fontsize=12, fontweight='bold')
-    
-    # Etichette sempre a 45° per leggibilità
     plt.xticks(rotation=45, ha='right', fontsize=10)
     plt.yticks(rotation=0, fontsize=10)
-    
     plt.tight_layout()
-    
     cm_path = os.path.join(output_dir, "confusion_matrix_detailed.png")
     plt.savefig(cm_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -221,101 +210,56 @@ def _create_visualizations(
     print(f"  🖼️ Matrice confusione dettagliata: {cm_path}")
     
     # 2. Matrice di Confusione Binaria (BENIGN vs ATTACCHI)
-    benign_idx = 0
-    if 'BENIGN' in class_names:
-        benign_idx = class_names.index('BENIGN')
-    
-    y_true_binary = (y_true != benign_idx).astype(int)
-    y_pred_binary = (y_pred != benign_idx).astype(int)
-    cm_binary = confusion_matrix(y_true_binary, y_pred_binary)
-    
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Reds',
-                xticklabels=['BENIGN', 'ATTACCO'], yticklabels=['BENIGN', 'ATTACCO'])
-    title_binary = 'Matrice di Confusione - Cybersecurity Focus\n(BENIGN vs ATTACCHI)'
-    if hyperparams_str:
-        title_binary += f'\n{hyperparams_str}'
-    plt.title(title_binary, fontsize=12, fontweight='bold')
-    plt.xlabel('Predizione', fontsize=12)
-    plt.ylabel('Reale', fontsize=12)
-    plt.tight_layout()
-    
-    cm_binary_path = os.path.join(output_dir, "confusion_matrix_cybersecurity.png")
-    plt.savefig(cm_binary_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    viz_paths.append(cm_binary_path)
-    print(f"  🖼️ Matrice confusione cybersecurity: {cm_binary_path}")
-    
-    # 3. Distribuzione Accuracy per Classe
-    class_accuracies = []
-    for i in range(len(class_names)):
-        class_mask = (y_true == i)
-        if np.any(class_mask):
-            class_acc = np.mean(y_pred[class_mask] == y_true[class_mask])
-            class_accuracies.append(class_acc)
-        else:
-            class_accuracies.append(0.0)
-    
-    plt.figure(figsize=(12, 6))
-    bars = plt.bar(range(len(class_names)), class_accuracies, 
-                   color=['green' if i == benign_idx else 'red' for i in range(len(class_names))])
-    title_acc = 'Accuracy per Classe di Traffico'
-    if hyperparams_str:
-        title_acc += f'\n{hyperparams_str}'
-    plt.title(title_acc, fontsize=14, fontweight='bold')
-    plt.xlabel('Classe', fontsize=12)
-    plt.ylabel('Accuracy', fontsize=12)
-    plt.xticks(range(len(class_names)), class_names, rotation=45, ha='right')
-    plt.ylim(0, 1)
-    
-    # Aggiungi valori sopra le barre
-    for i, (bar, acc) in enumerate(zip(bars, class_accuracies)):
-        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                f'{acc:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    
-    acc_path = os.path.join(output_dir, "accuracy_per_class.png")
-    plt.savefig(acc_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    viz_paths.append(acc_path)
-    print(f"  🖼️ Accuracy per classe: {acc_path}")
-    
+    benign_idx = class_names.index('BENIGN') if 'BENIGN' in class_names else -1
+    if benign_idx != -1:
+        y_true_binary = (y_true != benign_idx).astype(int)
+        y_pred_binary = (y_pred != benign_idx).astype(int)
+        cm_binary = confusion_matrix(y_true_binary, y_pred_binary)
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm_binary, annot=True, fmt='d', cmap='Reds',
+                    xticklabels=['BENIGN', 'ATTACCO'], yticklabels=['BENIGN', 'ATTACCO'])
+        title_binary = 'Matrice di Confusione - Cybersecurity Focus\n(BENIGN vs ATTACCHI)'
+        if hyperparams_str:
+            title_binary += f'\n{hyperparams_str}'
+        plt.title(title_binary, fontsize=12, fontweight='bold')
+        plt.xlabel('Predizione', fontsize=12)
+        plt.ylabel('Reale', fontsize=12)
+        plt.tight_layout()
+
+        cm_binary_path = os.path.join(output_dir, "confusion_matrix_cybersecurity.png")
+        plt.savefig(cm_binary_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        viz_paths.append(cm_binary_path)
+        print(f"  🖼️ Matrice confusione cybersecurity: {cm_binary_path}")
+
+    # 3. Grafici F1-Score e Recall per classe
+    metric_plot_paths = _create_per_class_metric_plots(report_dict, class_names, output_dir)
+    viz_paths.extend(metric_plot_paths)
+
     # 4. ROC Curve (solo se multiclasse e dataset sufficiente)
     if len(class_names) > 2 and y_pred_proba.shape[1] > 2 and len(y_true) > 10:
         try:
             plt.figure(figsize=(10, 8))
-            
-            # Binarizza le etichette
             y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
-            if y_true_bin.shape[1] == 1:  # Caso binario
+            if y_true_bin.shape[1] == 1:
                 y_true_bin = np.hstack([1-y_true_bin, y_true_bin])
             
-            # Calcola ROC per ogni classe
             fpr, tpr, roc_auc = {}, {}, {}
             for i in range(min(len(class_names), y_true_bin.shape[1])):
-                if np.any(y_true == i) and len(np.unique(y_true_bin[:, i])) > 1:  # Solo se la classe esiste e ha variabilità
+                if np.any(y_true == i) and len(np.unique(y_true_bin[:, i])) > 1:
                     fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_proba[:, i])
                     roc_auc[i] = auc(fpr[i], tpr[i])
-                    
-                    plt.plot(fpr[i], tpr[i], 
-                            label=f'{class_names[i]} (AUC = {roc_auc[i]:.3f})')
+                    plt.plot(fpr[i], tpr[i], label=f'{class_names[i]} (AUC = {roc_auc[i]:.3f})')
             
-            if len(fpr) > 0:  # Solo se abbiamo almeno una curva
+            if len(fpr) > 0:
                 plt.plot([0, 1], [0, 1], 'k--', alpha=0.8, label='Random Classifier')
                 plt.xlim([0.0, 1.0])
                 plt.ylim([0.0, 1.05])
                 plt.xlabel('Tasso Falsi Positivi (FPR)', fontsize=14, fontweight='bold')
                 plt.ylabel('Tasso Veri Positivi (TPR)', fontsize=14, fontweight='bold')
                 plt.title('Curve ROC - Analisi Performance per Classe', fontsize=16, fontweight='bold', pad=20)
-                
-                # Leggenda intelligente
-                if len(fpr) > 8:
-                    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
-                else:
-                    plt.legend(loc='lower right', fontsize=12)
-                
+                plt.legend(loc='lower right', fontsize=12)
                 plt.grid(alpha=0.3)
                 plt.tight_layout()
                 
@@ -326,13 +270,42 @@ def _create_visualizations(
                 print(f"  📈 ROC curves: {roc_path}")
             else:
                 print(f"  ⚠️ Skipping ROC: dataset troppo piccolo o senza variabilità")
-            
         except Exception as e:
             print(f"  ⚠️ Errore ROC curve: {e}")
     else:
         print(f"  ⚠️ Skipping ROC: dataset piccolo ({len(y_true)} campioni) o binario")
     
     return viz_paths
+
+def _create_per_class_metric_plots(
+    report_dict: Dict,
+    class_names: List[str],
+    output_dir: str
+) -> List[str]:
+    """Crea grafici per F1-score e Recall per ogni classe."""
+
+    report_df = pd.DataFrame(report_dict).transpose()
+    plot_df = report_df.loc[class_names] # Filtra solo le classi, esclude medie
+
+    plot_paths = []
+
+    metrics_to_plot = {'f1-score': 'F1 Score', 'recall': 'Recall'}
+    for metric, title in metrics_to_plot.items():
+        plt.figure(figsize=(12, 8))
+        sns.barplot(x=plot_df.index, y=plot_df[metric])
+        plt.title(f'{title} per Classe', fontsize=16, fontweight='bold')
+        plt.xticks(rotation=45, ha='right')
+        plt.ylabel(title)
+        plt.tight_layout()
+
+        plot_path = os.path.join(output_dir, f"per_class_{metric.replace('-','_')}.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        plot_paths.append(plot_path)
+        print(f"  🖼️ Grafico {title} per classe: {plot_path}")
+
+    return plot_paths
 
 def _format_hyperparameters_for_title(model_config: Dict = None) -> str:
     """Formatta gli iperparametri per i titoli delle visualizzazioni."""
@@ -455,3 +428,73 @@ def create_benchmark_comparison(
     
     print(f"📊 Confronto modelli salvato: {comparison_path}")
     return comparison_path
+
+def create_benchmark_summary_csv(
+    results_list: List[Dict],
+    output_dir: str
+) -> str:
+    """
+    Crea un file CSV riassuntivo per i risultati di un benchmark.
+
+    Args:
+        results_list: Lista di dizionari, ognuno è il report di una run.
+        output_dir: Directory dove salvare il file CSV.
+
+    Returns:
+        Path del file CSV generato.
+    """
+    if not results_list:
+        print("⚠️ La lista dei risultati è vuota, non genero il CSV.")
+        return ""
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    summary_data = []
+
+    # Estrai tutti i nomi delle classi di attacco per le colonne del CSV
+    all_attack_classes = set()
+    for result in results_list:
+        report = result.get('classification_report', {})
+        for class_name, metrics in report.items():
+            if isinstance(metrics, dict) and class_name != 'BENIGN':
+                all_attack_classes.add(class_name)
+
+    sorted_attack_classes = sorted(list(all_attack_classes))
+
+    for result in results_list:
+        model_config = result.get('model_config', {})
+        hyperparams = model_config.get('hyperparameters', {})
+        report = result.get('classification_report', {})
+        cyber_metrics = result.get('cybersecurity_metrics', {})
+
+        row = {
+            'model_type': model_config.get('model_type', 'N/A'),
+            'epochs': hyperparams.get('epochs', 'N/A'),
+            'batch_size': hyperparams.get('batch_size', 'N/A'),
+            'learning_rate': hyperparams.get('learning_rate', 'N/A'),
+            'accuracy': report.get('accuracy', 0),
+            'detection_rate': cyber_metrics.get('detection_rate', 0),
+            'false_alarm_rate': cyber_metrics.get('false_alarm_rate', 0),
+        }
+
+        # Aggiungi F1-score per ogni classe di attacco
+        for attack_class in sorted_attack_classes:
+            row[f'f1_{attack_class}'] = report.get(attack_class, {}).get('f1-score', 0)
+
+        summary_data.append(row)
+
+    df = pd.DataFrame(summary_data)
+
+    # Riorganizza le colonne per una migliore leggibilità
+    base_cols = ['model_type', 'epochs', 'batch_size', 'learning_rate', 'accuracy', 'detection_rate', 'false_alarm_rate']
+    f1_cols = [f'f1_{ac}' for ac in sorted_attack_classes]
+    df = df[base_cols + f1_cols]
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    csv_path = os.path.join(output_dir, f"benchmark_summary_{timestamp}.csv")
+
+    df.to_csv(csv_path, index=False)
+
+    print(f"📄 File CSV riassuntivo salvato in: {csv_path}")
+
+    return csv_path

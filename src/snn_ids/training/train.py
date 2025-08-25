@@ -144,7 +144,19 @@ def train_model_with_per_class_loss(
 
     y_pred_full = model.predict(X)
     y_pred_classes = np.argmax(y_pred_full, axis=1)
-    report = classification_report(y, y_pred_classes, target_names=label_encoder.classes_, output_dict=True, zero_division=0)
+
+    unique_labels = np.unique(y)
+    target_names_present = [label_encoder.classes_[i] for i in unique_labels]
+
+    report = classification_report(
+        y,
+        y_pred_classes,
+        labels=unique_labels,
+        target_names=target_names_present,
+        output_dict=True,
+        zero_division=0
+    )
+
     report_df = pd.DataFrame(report).transpose()
     loss_df = pd.DataFrame(loss_history)
     return model, loss_df, report_df

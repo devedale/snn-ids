@@ -164,7 +164,7 @@ def run_federated(use_he=False, use_dp=False, sweep=False, sample_size=None):
     # ... (implementation from before)
     pass
 
-def run_mlp_deep_analysis(sample_size: int = None):
+def run_mlp_deep_analysis(sample_size: int = None, epochs: int = 30, batch_size: int = 64, learning_rate: float = 0.001):
     """
     Runs a deep analysis on a 4-layer MLP, tracking per-class loss and metrics.
     """
@@ -175,7 +175,7 @@ def run_mlp_deep_analysis(sample_size: int = None):
     X, y, label_encoder = preprocess_pipeline(data_path=data_path, sample_size=sample_size)
 
     num_classes = len(np.unique(y))
-    hyperparams = {'epochs': 30, 'batch_size': 64, 'learning_rate': 0.001}
+    hyperparams = {'epochs': epochs, 'batch_size': batch_size, 'learning_rate': learning_rate}
 
     model, loss_df, metrics_df = train_model_with_per_class_loss(
         X, y, 'mlp_4_layer', hyperparams, num_classes, label_encoder

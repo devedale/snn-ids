@@ -32,6 +32,9 @@ Examples of use:
 
     p_mlp = subparsers.add_parser('mlp-analysis', help='Run the deep MLP analysis.')
     p_mlp.add_argument('--sample-size', type=int)
+    p_mlp.add_argument('--epochs', type=int, default=30)
+    p_mlp.add_argument('--batch-size', type=int, default=64)
+    p_mlp.add_argument('--learning-rate', type=float, default=0.001)
 
     p_progressive = subparsers.add_parser('progressive', help='Run benchmark with progressive data samples.')
     p_progressive.add_argument('--sample-size', type=int)
@@ -52,7 +55,10 @@ Examples of use:
         )
     elif args.mode == 'mlp-analysis':
         workflows.run_mlp_deep_analysis(
-            sample_size=args.sample_size
+            sample_size=args.sample_size,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate
         )
     elif args.mode == 'progressive':
         workflows.run_progressive(

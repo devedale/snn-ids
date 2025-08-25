@@ -19,7 +19,8 @@ from typing import Dict, List, Any
 # Import del benchmark esistente
 sys.path.append(os.path.abspath('.'))
 from benchmark import SNNIDSBenchmark
-from config import TRAINING_CONFIG, PREPROCESSING_CONFIG, DATA_CONFIG
+from config import TRAINING_CONFIG, PREPROCESSING_CONFIG, DATA_CONFIG, FEDERATED_CONFIG, HOMOMORPHIC_CONFIG
+from federated.fl_benchmark import run_fl_best_config
 
 class BestConfigBenchmark:
     """Benchmark dedicato alla configurazione migliore con fine-tuning."""
@@ -729,6 +730,13 @@ Esempi di utilizzo:
                        help='Numero di campioni da utilizzare')
     parser.add_argument('--data-path', type=str, 
                        help='Path ai dati del dataset')
+    # Modalità Federated + HE
+    parser.add_argument('--federated', action='store_true',
+                       help='Esegue benchmark best-config in modalità Federated Learning')
+    parser.add_argument('--he', action='store_true',
+                       help='Abilita Homomorphic Encryption per feature sensibili (usa HOMOMORPHIC_CONFIG)')
+    parser.add_argument('--dp', action='store_true',
+                       help='Abilita Differential Privacy sui gradienti (flag in FEDERATED_CONFIG)')
     parser.add_argument('--baseline-only', action='store_true',
                        help='Esegue solo il test baseline')
     parser.add_argument('--lr-only', action='store_true',
@@ -742,7 +750,28 @@ Esempi di utilizzo:
             data_path=args.data_path
         )
         
-        if args.baseline_only:
+        if args.federated:
+            # Override config runtime per flags
+            if args.he:
+                HOMOMORPHIC_CONFIG["enabled"] = True
+            if args.dp:
+                FEDERATED_CONFIG["differential_privacy"] = True
+
+            report = run_fl_best_config(
+                sample_size=args.sample_size,
+                data_path=args.data_path
+            )
+            # Salva output
+            out_dir = f"best_config_benchmark_{benchmark.timestamp}"
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "federated_best_config_report.json")
+            with open(out_path, 'w') as f:
+                json.dump(report, f, indent=2, default=str)
+            print(f"\n✅ Federated run completato. Accuracy: {report.get('best_accuracy', 0):.6f}")
+            print(f"🔐 Privacy report: {report.get('privacy_report')}")
+            print(f"💾 Salvato in: {out_path}")
+            return 0
+        elif args.baseline_only:
             result = benchmark.test_baseline_config()
             if result.get('status') == 'success':
                 print(f"✅ Baseline confermato: {result['best_accuracy']:.6f}")

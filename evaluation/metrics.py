@@ -28,7 +28,8 @@ def evaluate_model_comprehensive(
     y_test: np.ndarray,
     class_names: List[str],
     output_dir: str = "evaluation_results",
-    model_config: Dict = None
+    model_config: Dict = None,
+    class_loss_data: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Valutazione completa di un modello con metriche cybersecurity.
@@ -40,6 +41,7 @@ def evaluate_model_comprehensive(
         class_names: Nomi delle classi
         output_dir: Directory output
         model_config: Configurazione del modello (iperparametri, ecc.)
+        class_loss_data: Dati di loss per classe per epoca (opzionale)
         
     Returns:
         Dizionario con tutte le metriche
@@ -69,7 +71,7 @@ def evaluate_model_comprehensive(
     
     # Visualizzazioni
     viz_paths = _create_visualizations(
-        y_test, y_pred, y_pred_proba, cm, class_names, output_dir, model_config
+        y_test, y_pred, y_pred_proba, cm, class_names, output_dir, model_config, class_loss_data
     )
     
     # Report completo
@@ -177,7 +179,8 @@ def _create_visualizations(
     cm: np.ndarray,
     class_names: List[str],
     output_dir: str,
-    model_config: Dict = None
+    model_config: Dict = None,
+    class_loss_data: Optional[Dict] = None
 ) -> List[str]:
     """Crea visualizzazioni PNG."""
     
@@ -189,6 +192,16 @@ def _create_visualizations(
     
     viz_paths = []
     
+    # 0. Grafico Loss vs. Epochs per Classe (se disponibile)
+    if class_loss_data:
+        try:
+            loss_plot_path = plot_class_loss_over_epochs(
+                class_loss_data, class_names, output_dir, model_config
+            )
+            viz_paths.append(loss_plot_path)
+        except Exception as e:
+            print(f"  ⚠️ Errore durante la creazione del grafico di loss per classe: {e}")
+
     # 1. Matrice di Confusione Dettagliata
     num_classes = len(class_names)
     
@@ -333,6 +346,53 @@ def _create_visualizations(
         print(f"  ⚠️ Skipping ROC: dataset piccolo ({len(y_true)} campioni) o binario")
     
     return viz_paths
+
+def plot_class_loss_over_epochs(
+    class_losses: Dict[int, List[float]],
+    class_names: List[str],
+    output_dir: str,
+    model_config: Dict = None
+) -> str:
+    """
+    Crea e salva un grafico della loss di training per classe rispetto alle epoche.
+
+    Args:
+        class_losses: Dizionario {class_index: [loss_epoch_1, ...]}
+        class_names: Lista dei nomi delle classi.
+        output_dir: Directory dove salvare il grafico.
+        model_config: Configurazione del modello per il titolo del grafico.
+
+    Returns:
+        Path al file del grafico salvato.
+    """
+    plt.figure(figsize=(12, 8))
+
+    hyperparams_str = _format_hyperparameters_for_title(model_config)
+
+    for class_idx, losses in class_losses.items():
+        # Assicurati che l'indice della classe sia valido
+        if class_idx < len(class_names):
+            class_name = class_names[class_idx]
+            epochs = range(1, len(losses) + 1)
+            plt.plot(epochs, losses, marker='o', linestyle='-', label=f'Classe: {class_name}')
+        else:
+            print(f"  ⚠️ Skipping loss plot for index {class_idx}: index out of range for class_names.")
+
+    plt.title(f'Training Loss per Classe vs. Epoche\n{hyperparams_str}', fontsize=16, fontweight='bold')
+    plt.xlabel('Epoca', fontsize=12, fontweight='bold')
+    plt.ylabel('Loss (Cross-Entropy)', fontsize=12, fontweight='bold')
+    plt.xticks(np.arange(min(epochs), max(epochs)+1, step=max(1, len(epochs)//10))) # Tick per ogni epoca o quasi
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    plt.legend()
+    plt.tight_layout()
+
+    plot_path = os.path.join(output_dir, "class_loss_vs_epochs.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  📉 Grafico loss per classe: {plot_path}")
+
+    return plot_path
 
 def _format_hyperparameters_for_title(model_config: Dict = None) -> str:
     """Formatta gli iperparametri per i titoli delle visualizzazioni."""

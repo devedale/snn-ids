@@ -109,7 +109,6 @@ class SNNIDSBenchmark:
         """Smoke test veloce per verificare il funzionamento base."""
         print("🔥 SMOKE TEST - Verifica funzionamento base")
         smoke_config = {
-            'sample_size': self.config_override.get('sample_size', 5000),
             'model_type': 'dense',
             'hyperparameters': {
                 'epochs': [2],

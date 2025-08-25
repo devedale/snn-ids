@@ -132,50 +132,113 @@ def load_and_balance_dataset(
         raise FileNotFoundError("Nessun file di cache trovato. Eseguire prima _initialize_dataset_cache.")
 
     # Funzione per campionare attack files diversificando i tipi di attacco
+    # Funzione per campionare attack files preservando le label rare
     def _sample_attack_files(attack_files, target_samples):
         if not attack_files or target_samples <= 0:
             return pd.DataFrame()
         
-        print(f"    🎯 Strategia attack: diversificare i tipi di attacco")
+        print(f"    🎯 Strategia attack: preservazione label rare")
         
-        # Analizza ogni file per trovare i tipi di attacco
+        # FASE 1: Analisi globale dei conteggi per ogni label
+        print(f"    🔍 Analisi globale conteggi label...")
+        global_attack_counts = {}
         attack_types_by_file = {}
         total_attack_types = set()
         
         for file_path in attack_files:
             try:
-                # Carica solo le prime righe per analizzare i tipi di attacco
-                df_sample = pd.read_csv(file_path, nrows=1000, low_memory=False)
-                if 'Label' in df_sample.columns:
-                    file_attack_types = set(df_sample['Label'].unique())
-                    attack_types_by_file[file_path] = file_attack_types
-                    total_attack_types.update(file_attack_types)
-                    print(f"    🏷️  {os.path.basename(file_path)}: {len(file_attack_types)} tipi di attacco")
+                # Carica file completo per conteggio preciso
+                df = pd.read_csv(file_path, low_memory=False)
+                if 'Label' not in df.columns:
+                    continue
+                    
+                file_attack_types = set(df['Label'].unique()) - {'BENIGN'}
+                attack_types_by_file[file_path] = file_attack_types
+                total_attack_types.update(file_attack_types)
+                
+                # Conta record per ogni tipo di attacco in questo file
+                for attack_type in file_attack_types:
+                    count = len(df[df['Label'] == attack_type])
+                    global_attack_counts[attack_type] = global_attack_counts.get(attack_type, 0) + count
+                
+                print(f"    🏷️  {os.path.basename(file_path)}: {len(file_attack_types)} tipi di attacco")
+                
             except Exception as e:
                 print(f"    ⚠️ Errore nell'analizzare {file_path}: {e}")
                 continue
         
+        if not global_attack_counts:
+            print(f"    ❌ Nessun tipo di attacco trovato")
+            return pd.DataFrame()
+        
         print(f"    🌐 Trovati {len(total_attack_types)} tipi di attacco totali")
         
-        # Strategia: prendi campioni da ogni file per massimizzare la diversità
+        # FASE 2: Identifica label rare basandosi sulla quota per file
         samples_per_file = max(1, target_samples // len(attack_files))
-        remaining_samples = target_samples
+        rare_threshold = samples_per_file * 0.8  # 80% della quota per file
+        
+        rare_attacks = {
+            attack_type: count 
+            for attack_type, count in global_attack_counts.items() 
+            if count < rare_threshold
+        }
+        
+        common_attacks = {
+            attack_type: count 
+            for attack_type, count in global_attack_counts.items() 
+            if count >= rare_threshold
+        }
+        
+        print(f"    🔴 Label rare (< {rare_threshold:.0f} record): {len(rare_attacks)}")
+        print(f"    🟢 Label comuni (≥ {rare_threshold:.0f} record): {len(common_attacks)}")
+        
+        if rare_attacks:
+            print(f"    📋 Label rare identificate:")
+            for attack_type, count in sorted(rare_attacks.items(), key=lambda x: x[1]):
+                print(f"      • {attack_type}: {count} record totali")
+        
+        # FASE 3: Campionamento prioritario
         sampled_chunks = []
+        total_rare_samples = 0
         
         for file_path in attack_files:
-            if remaining_samples <= 0:
-                break
-                
-            samples_from_file = min(samples_per_file, remaining_samples)
             try:
                 df = pd.read_csv(file_path, low_memory=False)
-                if len(df) > samples_from_file:
-                    df_sampled = df.sample(n=samples_from_file, random_state=42)
-                else:
-                    df_sampled = df
-                sampled_chunks.append(df_sampled)
-                remaining_samples -= len(df_sampled)
-                print(f"    ⚔️  Campionati {len(df_sampled)} attack da {os.path.basename(file_path)}")
+                if 'Label' not in df.columns or len(df) == 0:
+                    continue
+                
+                file_samples = []
+                
+                # PRIORITÀ 1: Prendi TUTTI i record delle label rare
+                rare_samples_from_file = 0
+                for rare_attack in rare_attacks:
+                    rare_df = df[df['Label'] == rare_attack]
+                    if len(rare_df) > 0:
+                        file_samples.append(rare_df)
+                        rare_samples_from_file += len(rare_df)
+                        total_rare_samples += len(rare_df)
+                
+                # PRIORITÀ 2: Riempi il resto con label comuni
+                remaining_quota = max(0, samples_per_file - rare_samples_from_file)
+                
+                if remaining_quota > 0:
+                    # Campiona dalle label comuni
+                    common_df = df[df['Label'].isin(common_attacks.keys())]
+                    if len(common_df) > 0:
+                        if len(common_df) > remaining_quota:
+                            common_sampled = common_df.sample(n=remaining_quota, random_state=42)
+                        else:
+                            common_sampled = common_df
+                        file_samples.append(common_sampled)
+                
+                # Combina campioni da questo file
+                if file_samples:
+                    file_combined = pd.concat(file_samples, ignore_index=True)
+                    sampled_chunks.append(file_combined)
+                    
+                    rare_info = f"({rare_samples_from_file} rare)" if rare_samples_from_file > 0 else ""
+                    print(f"    ⚔️  Campionati {len(file_combined)} attack da {os.path.basename(file_path)} {rare_info}")
+                
             except Exception as e:
                 print(f"    ⚠️ Errore nel campionare da {file_path}: {e}")
                 continue
@@ -183,8 +246,24 @@ def load_and_balance_dataset(
         if not sampled_chunks:
             return pd.DataFrame()
         
-        return pd.concat(sampled_chunks, ignore_index=True)
-    
+        # FASE 4: Combina e analizza risultato finale
+        final_df = pd.concat(sampled_chunks, ignore_index=True)
+        
+        # Analisi finale della preservazione
+        final_attack_counts = final_df['Label'].value_counts().to_dict()
+        preserved_rare = sum(1 for rare_attack in rare_attacks if rare_attack in final_attack_counts)
+        
+        print(f"    🎯 Risultato campionamento:")
+        print(f"      📊 Campioni totali: {len(final_df)}")
+        print(f"      🔴 Label rare preservate: {preserved_rare}/{len(rare_attacks)}")
+        print(f"      📈 Record rare totali: {total_rare_samples}")
+        
+        if preserved_rare < len(rare_attacks):
+            missing_rare = set(rare_attacks.keys()) - set(final_attack_counts.keys())
+            print(f"      ⚠️  Label rare mancanti: {', '.join(missing_rare)}")
+        
+        return final_df
+
     # Funzione per campionare benign files (campionamento casuale semplice)
     def _sample_benign_files(benign_files, target_samples):
         if not benign_files or target_samples <= 0:

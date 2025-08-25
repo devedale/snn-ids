@@ -25,6 +25,7 @@ Esecuzioni supportate:
 Output principali:
 - Cartella `best_config_benchmark_<timestamp>/`
   - `federated_best_config_report.json` con accuracy e privacy report.
+  - `federated_sweep_comparison.json` e `federated_sweep_summary.csv` (se usi `--federated-sweep`) con iperparametri, tempi, accuracy, F1 macro e link visual.
   - Gli artefatti del benchmark standard restano invariati.
 
 Note HE:

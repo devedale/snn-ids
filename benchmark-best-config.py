@@ -774,6 +774,33 @@ Esempi di utilizzo:
                 print(f"HE    best acc: {comparison['he']['best']['accuracy']:.6f} params: {comparison['he']['best']['params']}")
             print(f"Δ accuracy (HE - NO-HE): {comparison.get('delta_accuracy_best')}")
             print(f"💾 Salvato in: {out_path}")
+
+            # CSV riepilogativo della sweep
+            try:
+                import pandas as pd
+                rows = []
+                for label in ['no_he', 'he']:
+                    suite = comparison.get(label, {})
+                    for run in suite.get('all_runs', []):
+                        params = run.get('params', {})
+                        rows.append({
+                            'he_enabled': (label == 'he'),
+                            'learning_rate': params.get('learning_rate'),
+                            'gru_units': params.get('gru_units'),
+                            'epochs': params.get('epochs'),
+                            'batch_eff': run.get('batch_size_effective'),
+                            'training_time_s': run.get('training_time'),
+                            'accuracy': run.get('accuracy'),
+                            'f1_macro': run.get('f1_macro'),
+                            'eval_dir': run.get('eval_dir')
+                        })
+                if rows:
+                    df = pd.DataFrame(rows)
+                    csv_path = os.path.join(out_dir, 'federated_sweep_summary.csv')
+                    df.to_csv(csv_path, index=False)
+                    print(f"📊 CSV sweep: {csv_path}")
+            except Exception as e:
+                print(f"⚠️ Errore scrittura CSV sweep: {e}")
             return 0
         elif args.federated:
             # Override config runtime per flags

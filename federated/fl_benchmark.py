@@ -255,6 +255,12 @@ def _run_fl_once(X: np.ndarray, y: np.ndarray, params: Dict[str, Any], he_enable
         }
     }
     eval_report = evaluate_model_comprehensive(final_model, X_test, y_test, [], eval_dir, model_config)
+    # Estrai F1 macro se possibile
+    try:
+        f1_list = eval_report.get('basic_metrics', {}).get('f1_per_class', [])
+        f1_macro = float(np.mean(f1_list)) if f1_list else None
+    except Exception:
+        f1_macro = None
 
     # Ripristina HE
     HOMOMORPHIC_CONFIG['enabled'] = prev_he
@@ -268,7 +274,8 @@ def _run_fl_once(X: np.ndarray, y: np.ndarray, params: Dict[str, Any], he_enable
         'params': params,
         'batch_size_effective': batch_size,
         'model_type': model_type,
-        'evaluation_report': eval_report
+        'evaluation_report': eval_report,
+        'f1_macro': f1_macro
     }
 
 
@@ -310,10 +317,21 @@ def run_fl_grid_search(sample_size: int = None, data_path: str = None, he_enable
     summary = {
         'he_enabled': he_enabled,
         'total_runs': len(results),
+        'all_runs': [
+            {
+                'accuracy': r.get('accuracy'),
+                'f1_macro': r.get('f1_macro'),
+                'params': r.get('params'),
+                'batch_size_effective': r.get('batch_size_effective'),
+                'training_time': r.get('total_time'),
+                'eval_dir': r.get('eval_dir')
+            } for r in results
+        ],
         'top_10': [
             {
                 'rank': i + 1,
                 'accuracy': r['accuracy'],
+                'f1_macro': r.get('f1_macro'),
                 'params': r['params'],
                 'batch_size_effective': r['batch_size_effective'],
                 'eval_dir': r['eval_dir']
@@ -321,6 +339,7 @@ def run_fl_grid_search(sample_size: int = None, data_path: str = None, he_enable
         ],
         'best': {
             'accuracy': best['accuracy'],
+            'f1_macro': best.get('f1_macro'),
             'params': best['params'],
             'batch_size_effective': best['batch_size_effective'],
             'eval_dir': best['eval_dir']

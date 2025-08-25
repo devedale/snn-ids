@@ -12,7 +12,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
 import json
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 # Import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,6 +73,16 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
         ])
+    elif model_type == 'mlp_4_layer':
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=input_shape),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
+        ])
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
     
@@ -91,7 +101,8 @@ def train_model(
     y: np.ndarray, 
     model_type: str = None,
     validation_strategy: str = None,
-    hyperparams: Dict = None
+    hyperparams: Dict = None,
+    callbacks: List = None
 ) -> Tuple[tf.keras.Model, Dict, str]:
     """
     Addestra un modello con validazione.
@@ -149,7 +160,11 @@ def train_model(
                 num_classes = max(len(np.unique(y)), np.max(y) + 1)  # Fix per classi mancanti
                 input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
                 best_model = build_model(model_type, input_shape, num_classes, params)
-                best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+                print(">>> FITTING FINAL MODEL <<<")
+                history = best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0, callbacks=callbacks)
+                # Store history in the log
+                if 'history' not in training_log[-1]:
+                    training_log[-1]['history'] = history.history
                 
                 print(f"🏆 Nuovo miglior modello: {accuracy:.4f}")
         

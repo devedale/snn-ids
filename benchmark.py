@@ -19,14 +19,8 @@ def main():
 Examples of use:
 # Run a standard centralized smoke test
    python3 benchmark.py centralized --smoke-test
-# Run the progressive optimization benchmark
-   python3 benchmark.py progressive --models gru
-# Run the best-config fine-tuning workflow
-   python3 benchmark.py best-config --sample-size 20000
-# Run a federated experiment with Homomorphic Encryption
-   python3 benchmark.py federated --he
-# Run a federated sweep to compare HE vs non-HE
-   python3 benchmark.py federated --sweep
+# Run the new MLP deep analysis
+   python3 benchmark.py mlp-analysis --sample-size 10000
 '''
     subparsers = parser.add_subparsers(dest='mode', required=True, help="Select the execution mode.")
 
@@ -36,18 +30,13 @@ Examples of use:
     p_centralized.add_argument('--sample-size', type=int)
     p_centralized.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'])
 
-    p_progressive = subparsers.add_parser('progressive', help='Run the progressive optimization benchmark.')
-    p_progressive.add_argument('--sample-size', type=int)
-    p_progressive.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'])
+    p_mlp = subparsers.add_parser('mlp-analysis', help='Run the deep MLP analysis.')
+    p_mlp.add_argument('--sample-size', type=int)
 
-    p_best_config = subparsers.add_parser('best-config', help='Run the fine-tuning workflow.')
-    p_best_config.add_argument('--sample-size', type=int)
-
-    p_federated = subparsers.add_parser('federated', help='Run Federated Learning experiments.')
-    p_federated.add_argument('--he', action='store_true')
-    p_federated.add_argument('--dp', action='store_true')
-    p_federated.add_argument('--sweep', action='store_true')
-    p_federated.add_argument('--sample-size', type=int)
+    # Placeholders for other modes
+    subparsers.add_parser('progressive', help='(Not yet implemented)')
+    subparsers.add_parser('best-config', help='(Not yet implemented)')
+    subparsers.add_parser('federated', help='(Not yet implemented)')
     
     args = parser.parse_args()
 
@@ -58,22 +47,12 @@ Examples of use:
             sample_size=args.sample_size,
             models_to_test=args.models
         )
-    elif args.mode == 'progressive':
-        workflows.run_progressive(
-            sample_size=args.sample_size,
-            models_to_test=args.models
-        )
-    elif args.mode == 'best-config':
-        workflows.run_best_config_tuning(
+    elif args.mode == 'mlp-analysis':
+        workflows.run_mlp_deep_analysis(
             sample_size=args.sample_size
         )
-    elif args.mode == 'federated':
-        workflows.run_federated(
-            use_he=args.he,
-            use_dp=args.dp,
-            sweep=args.sweep,
-            sample_size=args.sample_size
-        )
+    else:
+        print(f"Mode '{args.mode}' is not yet implemented.")
 
 if __name__ == '__main__':
     main()

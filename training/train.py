@@ -34,6 +34,14 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, params: D
     print(f"🏗️ Costruzione modello {model_type}")
     print(f"📊 Input shape: {input_shape}")
     print(f"🏷️ Classi: {num_classes}")
+    # Log iperparametri principali
+    try:
+        hp_epochs = params.get('epochs', '?')
+        hp_batch = params.get('batch_size', '?')
+        hp_units = params.get('gru_units', params.get('lstm_units', 64))
+        print(f"⚙️ Hyperparams: lr={learning_rate}, act={activation}, units={hp_units}, epochs={hp_epochs}, batch={hp_batch}")
+    except Exception:
+        pass
     
     units = params.get('gru_units', params.get('lstm_units', 64))
     activation = params.get('activation', 'relu')

@@ -20,7 +20,7 @@ from typing import Dict, List, Any
 sys.path.append(os.path.abspath('.'))
 from benchmark import SNNIDSBenchmark
 from config import TRAINING_CONFIG, PREPROCESSING_CONFIG, DATA_CONFIG, FEDERATED_CONFIG, HOMOMORPHIC_CONFIG
-from federated.fl_benchmark import run_fl_best_config
+from federated.fl_benchmark import run_fl_best_config, run_fl_comparison_sweep
 
 class BestConfigBenchmark:
     """Benchmark dedicato alla configurazione migliore con fine-tuning."""
@@ -737,6 +737,8 @@ Esempi di utilizzo:
                        help='Abilita Homomorphic Encryption per feature sensibili (usa HOMOMORPHIC_CONFIG)')
     parser.add_argument('--dp', action='store_true',
                        help='Abilita Differential Privacy sui gradienti (flag in FEDERATED_CONFIG)')
+    parser.add_argument('--federated-sweep', action='store_true',
+                       help='Esegue una mini grid search in FL per confrontare NO-HE vs HE e produce top-10 e best config')
     parser.add_argument('--baseline-only', action='store_true',
                        help='Esegue solo il test baseline')
     parser.add_argument('--lr-only', action='store_true',
@@ -750,7 +752,30 @@ Esempi di utilizzo:
             data_path=args.data_path
         )
         
-        if args.federated:
+        if args.federated_sweep:
+            if args.he:
+                HOMOMORPHIC_CONFIG["enabled"] = True
+            if args.dp:
+                FEDERATED_CONFIG["differential_privacy"] = True
+
+            comparison = run_fl_comparison_sweep(
+                sample_size=args.sample_size,
+                data_path=args.data_path
+            )
+            out_dir = f"best_config_benchmark_{benchmark.timestamp}"
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "federated_sweep_comparison.json")
+            with open(out_path, 'w') as f:
+                json.dump(comparison, f, indent=2, default=str)
+            print(f"\n🏁 Federated sweep completata.")
+            if comparison.get('no_he', {}).get('best'):
+                print(f"NO-HE best acc: {comparison['no_he']['best']['accuracy']:.6f} params: {comparison['no_he']['best']['params']}")
+            if comparison.get('he', {}).get('best'):
+                print(f"HE    best acc: {comparison['he']['best']['accuracy']:.6f} params: {comparison['he']['best']['params']}")
+            print(f"Δ accuracy (HE - NO-HE): {comparison.get('delta_accuracy_best')}")
+            print(f"💾 Salvato in: {out_path}")
+            return 0
+        elif args.federated:
             # Override config runtime per flags
             if args.he:
                 HOMOMORPHIC_CONFIG["enabled"] = True

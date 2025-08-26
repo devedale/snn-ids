@@ -11,6 +11,7 @@ import tensorflow as tf
 from sklearn.model_selection import StratifiedKFold, train_test_split, KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
+from sklearn.utils import class_weight
 import json
 from typing import Tuple, Dict, Any, Optional, List
 
@@ -290,10 +291,20 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
             loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y)))
             callbacks.append(loss_logger)
 
+        # Calculate class weights to handle imbalance
+        class_weights = class_weight.compute_class_weight(
+            'balanced',
+            classes=np.unique(y_train),
+            y=y_train
+        )
+        class_weight_dict = dict(enumerate(class_weights))
+        print("  ⚖️  Applying class weights to handle imbalance.")
+
         model.fit(X_train, y_train, 
                  epochs=params['epochs'], 
                  batch_size=params['batch_size'], 
                  callbacks=callbacks,
+                 class_weight=class_weight_dict,
                  verbose=0)
         
         if track_class_loss:
@@ -348,11 +359,21 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, tr
         loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y)))
         callbacks.append(loss_logger)
 
+    # Calculate class weights to handle imbalance
+    class_weights = class_weight.compute_class_weight(
+        'balanced',
+        classes=np.unique(y_train),
+        y=y_train
+    )
+    class_weight_dict = dict(enumerate(class_weights))
+    print("  ⚖️  Applying class weights to handle imbalance.")
+
     model.fit(X_train, y_train,
              epochs=params['epochs'],
              batch_size=params['batch_size'],
              validation_data=(X_test, y_test),
              callbacks=callbacks,
+             class_weight=class_weight_dict,
              verbose=1)
     
     _, accuracy = model.evaluate(X_test, y_test, verbose=0)

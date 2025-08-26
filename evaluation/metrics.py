@@ -354,7 +354,7 @@ def plot_class_loss_over_epochs(
     model_config: Dict = None
 ) -> str:
     """
-    Crea e salva un grafico della loss di training per classe rispetto alle epoche.
+    Crea e salva un'immagine contenente una griglia di grafici di loss per classe.
 
     Args:
         class_losses: Dizionario {class_index: [loss_epoch_1, ...]}
@@ -365,32 +365,54 @@ def plot_class_loss_over_epochs(
     Returns:
         Path al file del grafico salvato.
     """
-    plt.figure(figsize=(12, 8))
+    num_classes = len(class_losses)
+    if num_classes == 0:
+        return ""
+
+    # Determine grid size (e.g., 5x5 grid for up to 25 classes)
+    ncols = 5
+    nrows = int(np.ceil(num_classes / ncols))
+
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(20, 4 * nrows), constrained_layout=True)
+    axes = axes.flatten() # Flatten to make it easy to iterate
 
     hyperparams_str = _format_hyperparameters_for_title(model_config)
+    fig.suptitle(f'Training Loss per Classe vs. Epoche\n{hyperparams_str}', fontsize=20, fontweight='bold')
 
-    for class_idx, losses in class_losses.items():
-        # Assicurati che l'indice della classe sia valido
-        if class_idx < len(class_names):
-            class_name = class_names[class_idx]
-            epochs = range(1, len(losses) + 1)
-            plt.plot(epochs, losses, marker='o', linestyle='-', label=f'Classe: {class_name}')
-        else:
-            print(f"  ⚠️ Skipping loss plot for index {class_idx}: index out of range for class_names.")
+    for i, (class_idx, losses) in enumerate(class_losses.items()):
+        ax = axes[i]
 
-    plt.title(f'Training Loss per Classe vs. Epoche\n{hyperparams_str}', fontsize=16, fontweight='bold')
-    plt.xlabel('Epoca', fontsize=12, fontweight='bold')
-    plt.ylabel('Loss (Cross-Entropy)', fontsize=12, fontweight='bold')
-    plt.xticks(np.arange(min(epochs), max(epochs)+1, step=max(1, len(epochs)//10))) # Tick per ogni epoca o quasi
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-    plt.legend()
-    plt.tight_layout()
+        # Filter out None values in case a class was missing in a fold
+        valid_losses = [l for l in losses if l is not None]
+        if not valid_losses:
+            ax.text(0.5, 0.5, 'N/A', ha='center', va='center', fontsize=12, alpha=0.5)
+            ax.set_title(f"Classe: {class_names[class_idx]} (No Data)", fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
 
-    plot_path = os.path.join(output_dir, "class_loss_vs_epochs.png")
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    plt.close()
+        epochs = range(1, len(valid_losses) + 1)
+        ax.plot(epochs, valid_losses, marker='o', linestyle='-', markersize=4)
 
-    print(f"  📉 Grafico loss per classe: {plot_path}")
+        class_name = class_names[class_idx] if class_idx < len(class_names) else f"Index {class_idx}"
+        ax.set_title(f"Classe: {class_name}", fontsize=10)
+        ax.set_xlabel('Epoca', fontsize=8)
+        ax.set_ylabel('Loss', fontsize=8)
+        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+
+        # Adjust tick font size for readability
+        ax.tick_params(axis='x', labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plot_path = os.path.join(output_dir, "class_loss_vs_epochs_subplots.png")
+    plt.savefig(plot_path, dpi=300)
+    plt.close(fig)
+
+    print(f"  📉 Grafico loss per classe (subplots): {plot_path}")
 
     return plot_path
 

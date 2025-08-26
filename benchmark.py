@@ -68,14 +68,17 @@ class SNNIDSBenchmark:
         print("\n🏋️ TRAINING")
         try:
             train_start = time.time()
-            model, training_log, model_path = train_model(
+            # The train_model function was modified to return per_class_losses, so we handle 4 return values now.
+            model, training_log, model_path, per_class_losses = train_model(
                 X=X, y=y,
                 model_type=test_config['model_type'],
-                hyperparams=test_config['hyperparameters']
+                hyperparams=test_config['hyperparameters'],
+                track_class_loss=True # Always track loss for potential analysis
             )
             train_time = time.time() - train_start
-            best_accuracy = max([run['accuracy'] for run in training_log]) if training_log else 0
-            print(f"✅ Training completato in {train_time:.2f}s. Accuratezza: {best_accuracy:.4f}")
+            # The new train_model returns a log with a single entry
+            best_accuracy = training_log[0]['accuracy'] if training_log else 0
+            print(f"✅ Training completato in {train_time:.2f}s. Accuratezza di validazione: {best_accuracy:.4f}")
         except Exception as e:
             print(f"❌ Errore nel training: {e}")
             return {'status': 'error', 'stage': 'training', 'error': str(e), 'config': test_config}
@@ -83,7 +86,8 @@ class SNNIDSBenchmark:
         # --- 3. Valutazione ---
         print("\n📊 VALUTAZIONE")
         try:
-            eval_result = self._run_evaluation(model, X, y, label_encoder, test_config)
+            # Pass the per_class_losses to the evaluation function
+            eval_result = self._run_evaluation(model, X, y, label_encoder, test_config, per_class_losses)
             print("✅ Valutazione completata.")
         except Exception as e:
             print(f"❌ Errore nella valutazione: {e}")
@@ -189,7 +193,7 @@ class SNNIDSBenchmark:
             print(f"🏆 Miglior modello: {summary['best_model']['config']['model_type']} con accuratezza {summary['best_model']['best_accuracy']:.4f}")
         return final_result
 
-    def _run_evaluation(self, model, X, y, label_encoder, test_config):
+    def _run_evaluation(self, model, X, y, label_encoder, test_config, class_loss_data=None):
         """Esegue valutazione completa con visualizzazioni."""
         from sklearn.model_selection import train_test_split
         
@@ -215,11 +219,15 @@ class SNNIDSBenchmark:
         # Crea nome directory descrittivo con iperparametri
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         descriptive_name = self._generate_descriptive_folder_name(test_config, timestamp)
-        eval_dir = os.path.join("benchmark_results", descriptive_name, "visualizations")
+        # Use the main output directory from the calling script if available
+        base_output_dir = test_config.get('output_dir', 'benchmark_results')
+        run_dir = os.path.join(base_output_dir, descriptive_name)
+        eval_dir = os.path.join(run_dir, "visualizations")
+
 
         evaluation_report = evaluate_model_comprehensive(
             model=model, X_test=X_test, y_test=y_test, class_names=class_names, 
-            output_dir=eval_dir, model_config=test_config
+            output_dir=eval_dir, model_config=test_config, class_loss_data=class_loss_data
         )
         return {'status': 'success', 'evaluation_dir': eval_dir, 'report': evaluation_report}
 

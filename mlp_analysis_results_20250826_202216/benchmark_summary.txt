@@ -1,0 +1,36 @@
+================================================================================
+🔬 MLP ANALYSIS BENCHMARK SUMMARY 🔬
+================================================================================
+
+Timestamp: 20250826_202216
+Total Runtime: 372.34 seconds
+Total Configurations Tested: 1
+Successful Runs: 1
+
+--------------------------------------------------------------------------------
+🏆 BEST CONFIGURATION 🏆
+--------------------------------------------------------------------------------
+
+Rank: 1
+Run ID: mlp_4_layer_1756239736
+Accuracy: 0.862228
+Mean F1-Score: 0.030622
+Mean Recall: 0.045455
+
+Hyperparameters:
+{
+  "learning_rate": 0.001,
+  "batch_size": 64,
+  "activation": "relu",
+  "hidden_layer_units": [
+    128,
+    64,
+    32,
+    16
+  ],
+  "dropout": 0.2,
+  "epochs": 30
+}
+
+Find detailed evaluation report and confusion matrix in:
+  benchmark_results/20250826_202820_MLP_4_LAYER_ep30_bs64_lr0.001_actrelu_drop0.2/visualizations

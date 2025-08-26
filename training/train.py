@@ -8,7 +8,7 @@ import os
 import sys
 import numpy as np
 import tensorflow as tf
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split, KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
 import json
@@ -253,7 +253,7 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
     class_counts = np.bincount(y)
     if np.min(class_counts) < TRAINING_CONFIG["k_fold_splits"]:
         print(f"  ⚠️  Disabling stratification for K-Fold due to classes with < {TRAINING_CONFIG['k_fold_splits']} samples.")
-        kf = tf.keras.model_selection.KFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
+        kf = KFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
     else:
         kf = StratifiedKFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
 

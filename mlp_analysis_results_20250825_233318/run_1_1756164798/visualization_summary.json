@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-08-25 23:34:47.862339",
+  "total_images": 5,
+  "generated_files": [
+    "class_loss_vs_epochs.png",
+    "confusion_matrix_detailed.png",
+    "confusion_matrix_cybersecurity.png",
+    "accuracy_per_class.png",
+    "roc_curves.png"
+  ],
+  "output_directory": "mlp_analysis_results_20250825_233318/run_1_1756164798/visualizations"
+}

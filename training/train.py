@@ -153,14 +153,14 @@ def train_model(
     track_class_loss: bool = False
 ) -> Tuple[tf.keras.Model, Dict, str, Optional[Dict]]:
     """
-    Addestra un modello con validazione.
+    Addestra un modello con validazione per una SINGOLA configurazione di iperparametri.
     
     Args:
         X: Features
         y: Target
         model_type: Tipo di modello (default da config)
         validation_strategy: Strategia validazione (default da config)
-        hyperparams: Iperparametri (default da config)
+        hyperparams: Iperparametri per la singola esecuzione.
         track_class_loss: Se True, traccia la loss per classe ad ogni epoca.
         
     Returns:
@@ -169,71 +169,54 @@ def train_model(
     # Usa valori di default
     model_type = model_type or TRAINING_CONFIG["model_type"]
     validation_strategy = validation_strategy or TRAINING_CONFIG["validation_strategy"]
-    hyperparams = hyperparams or TRAINING_CONFIG["hyperparameters"]
+    params = hyperparams or TRAINING_CONFIG["hyperparameters"] # Ora 'params' è la configurazione singola
     
-    print("🚀 Avvio training")
+    print("🚀 Avvio training per singola configurazione")
     print(f"🏗️ Modello: {model_type}")
     print(f"📊 Strategia: {validation_strategy}")
     print(f"📊 Dataset: {X.shape}")
-    
-    # Prepara hyperparameters per grid search
-    param_combinations = _create_param_combinations(hyperparams)
-    print(f"🔍 Configurazioni da testare: {len(param_combinations)}")
-    
-    # Training e validazione
-    best_accuracy = 0
-    best_model = None
+    print(f"⚙️ Parametri: {params}")
+
     training_log = []
-    best_per_class_losses = None
     
-    for i, params in enumerate(param_combinations):
-        print(f"\n--- Configurazione {i+1}/{len(param_combinations)} ---")
-        print(f"Parametri: {params}")
+    try:
+        if validation_strategy == "k_fold":
+            accuracy, per_class_losses = _train_k_fold(X, y, model_type, params, track_class_loss)
+        else:  # train_test_split
+            accuracy, per_class_losses = _train_split(X, y, model_type, params, track_class_loss)
         
-        try:
-            if validation_strategy == "k_fold":
-                # K-fold non è ideale per il tracciamento della loss per classe su un singolo training set,
-                # ma implementiamo una versione base che restituisce la loss dell'ultimo fold.
-                accuracy, per_class_losses = _train_k_fold(X, y, model_type, params, track_class_loss)
-            else:  # train_test_split
-                accuracy, per_class_losses = _train_split(X, y, model_type, params, track_class_loss)
-            
-            training_log.append({
-                'params': params,
-                'accuracy': float(accuracy),
-                'config_id': i
-            })
-            
-            print(f"✅ Accuratezza: {accuracy:.4f}")
-            
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
-                best_per_class_losses = per_class_losses
-                # Addestra modello finale con tutti i dati
-                num_classes = max(len(np.unique(y)), np.max(y) + 1)
-                input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
-                best_model = build_model(model_type, input_shape, num_classes, params)
-                best_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
-                
-                print(f"🏆 Nuovo miglior modello: {accuracy:.4f}")
+        training_log.append({
+            'params': params,
+            'accuracy': float(accuracy),
+        })
+
+        print(f"✅ Accuratezza validazione: {accuracy:.4f}")
         
-        except Exception as e:
-            print(f"❌ Errore nella configurazione {i+1}: {e}")
-            import traceback
-            traceback.print_exc()
-            training_log.append({
-                'params': params,
-                'accuracy': 0.0,
-                'error': str(e),
-                'config_id': i
-            })
+        # Addestra modello finale con tutti i dati
+        num_classes = max(len(np.unique(y)), np.max(y) + 1)
+        input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
+        final_model = build_model(model_type, input_shape, num_classes, params)
+        final_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+
+        print(f"🏆 Modello finale addestrato su tutti i dati.")
+
+    except Exception as e:
+        print(f"❌ Errore durante il training: {e}")
+        import traceback
+        traceback.print_exc()
+        training_log.append({
+            'params': params,
+            'accuracy': 0.0,
+            'error': str(e),
+        })
+        raise e # Rilancia l'eccezione per far fallire il test singolo in mlp-analysis
     
     # Salva modello migliore
     os.makedirs(TRAINING_CONFIG["output_path"], exist_ok=True)
     model_path = os.path.join(TRAINING_CONFIG["output_path"], "best_model.keras")
     
-    if best_model:
-        best_model.save(model_path)
+    if final_model:
+        final_model.save(model_path)
         print(f"💾 Modello salvato: {model_path}")
     else:
         raise ValueError("Nessun modello valido addestrato!")
@@ -244,9 +227,8 @@ def train_model(
         json.dump(training_log, f, indent=2)
     
     print(f"✅ Training completato!")
-    print(f"🏆 Miglior accuratezza: {best_accuracy:.4f}")
     
-    return best_model, training_log, model_path, best_per_class_losses
+    return final_model, training_log, model_path, per_class_losses
 
 def _create_param_combinations(hyperparams: Dict) -> list:
     """
@@ -267,7 +249,14 @@ def _create_param_combinations(hyperparams: Dict) -> list:
 
 def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
     """Training con K-Fold cross validation."""
-    kf = StratifiedKFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
+    # Controlla se la stratificazione è possibile
+    class_counts = np.bincount(y)
+    if np.min(class_counts) < TRAINING_CONFIG["k_fold_splits"]:
+        print(f"  ⚠️  Disabling stratification for K-Fold due to classes with < {TRAINING_CONFIG['k_fold_splits']} samples.")
+        kf = tf.keras.model_selection.KFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
+    else:
+        kf = StratifiedKFold(n_splits=TRAINING_CONFIG["k_fold_splits"], shuffle=True, random_state=42)
+
     accuracies = []
     last_fold_losses = None
     
@@ -319,8 +308,17 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
 def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
     """Training con train/test split."""
     test_size = TRAINING_CONFIG["test_size"]
+
+    # Controlla se la stratificazione è possibile
+    class_counts = np.bincount(y)
+    if np.min(class_counts) < 2:
+        print("  ⚠️  Disabling stratification for train/test split due to classes with 1 sample.")
+        stratify_opt = None
+    else:
+        stratify_opt = y
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y
+        X, y, test_size=test_size, random_state=42, stratify=stratify_opt
     )
     
     print(f"  Train: {X_train.shape[0]}, Test: {X_test.shape[0]}")

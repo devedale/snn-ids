@@ -124,9 +124,10 @@ def _calculate_cybersecurity_metrics(
     """Calcola metriche specifiche per cybersecurity."""
     
     # Identifica classe BENIGN (indice 0 di solito)
+    class_names_list = class_names.tolist()
     benign_idx = 0
-    if 'BENIGN' in class_names:
-        benign_idx = class_names.index('BENIGN')
+    if 'BENIGN' in class_names_list:
+        benign_idx = class_names_list.index('BENIGN')
     
     # Converti in binario: BENIGN vs ATTACCHI
     y_true_binary = (y_true != benign_idx).astype(int)  # 1 = attacco, 0 = benign

@@ -13,7 +13,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
 from sklearn.utils import class_weight
 import json
-from typing import Tuple, Dict, Any, Optional, List
+from typing import Tuple, Dict, Any, Optional, List, Union
+import keras_tuner as kt
 
 # Import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,99 +51,103 @@ class PerClassLossLogger(tf.keras.callbacks.Callback):
                 self.losses[class_idx].append(None)
                 print(f"  - Class {class_idx}: No samples in this training set.")
 
-def build_model(model_type: str, input_shape: tuple, num_classes: int, params: Dict) -> tf.keras.Model:
+def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_params: Union[kt.HyperParameters, Dict]) -> tf.keras.Model:
     """
-    Costruisce un modello Keras.
+    Costruisce un modello Keras, compatibile con KerasTuner e dizionari di parametri.
     
     Args:
-        model_type: Tipo di modello ('gru', 'lstm', 'dense')
+        model_type: Tipo di modello ('gru', 'lstm', 'dense', 'mlp_4_layer')
         input_shape: Forma dell'input
         num_classes: Numero di classi
-        params: Parametri del modello
+        hp_or_params: Oggetto HyperParameters di KerasTuner o un dizionario di iperparametri fissi.
         
     Returns:
         Modello Keras compilato
     """
-    print(f"🏗️ Costruzione modello {model_type}")
+    hp = hp_or_params
+    if isinstance(hp_or_params, dict):
+        # Converte il dizionario in un oggetto HyperParameters con valori fissi per compatibilità
+        params = hp_or_params
+        hp = kt.HyperParameters()
+
+        # Imposta i valori di default se non presenti nel dizionario
+        hp.Fixed('learning_rate', params.get('learning_rate', 0.001))
+        hp.Fixed('activation', params.get('activation', 'relu'))
+        hp.Fixed('dropout', params.get('dropout', 0.2))
+
+        if model_type in ['gru', 'lstm']:
+            hp.Fixed('units', params.get('gru_units', params.get('lstm_units', 64)))
+
+        if model_type == 'mlp_4_layer':
+            hidden_units = params.get('hidden_layer_units', [128, 64, 32, 16])
+            hp.Fixed('units_layer_1', hidden_units[0])
+            hp.Fixed('units_layer_2', hidden_units[1])
+            hp.Fixed('units_layer_3', hidden_units[2])
+            hp.Fixed('units_layer_4', hidden_units[3])
+
+    print(f"🏗️ Costruzione modello {model_type} (tuner-ready)")
     print(f"📊 Input shape: {input_shape}")
     print(f"🏷️ Classi: {num_classes}")
-    # Log iperparametri principali
-    try:
-        hp_epochs = params.get('epochs', '?')
-        hp_batch = params.get('batch_size', '?')
-        hp_units = params.get('gru_units', params.get('lstm_units', 64))
-        learning_rate = params.get('learning_rate', 0.001)
-        activation = params.get('activation', 'relu')
-        print(f"⚙️ Hyperparams: lr={learning_rate}, act={activation}, units={hp_units}, epochs={hp_epochs}, batch={hp_batch}")
-    except Exception:
-        pass
+
+    # Definizione dello spazio di ricerca degli iperparametri comuni
+    learning_rate = hp.Choice('learning_rate', values=[0.005, 0.001, 0.0005, 0.0001])
+    activation = hp.Choice('activation', values=['relu', 'tanh'])
     
-    units = params.get('gru_units', params.get('lstm_units', 64))
-    activation = params.get('activation', 'relu')
-    learning_rate = params.get('learning_rate', 0.001)
-    
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Input(shape=input_shape))
+
     if model_type == 'gru':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.GRU(units, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
-        ])
+        units = hp.Int('units', min_value=32, max_value=128, step=32)
+        model.add(tf.keras.layers.GRU(units, activation=activation))
+        model.add(tf.keras.layers.Dropout(0.2))
+        model.add(tf.keras.layers.Dense(units // 2, activation=activation))
+
     elif model_type == 'lstm':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.LSTM(units, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(units // 2, activation=activation),
-            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
-        ])
+        units = hp.Int('units', min_value=32, max_value=128, step=32)
+        model.add(tf.keras.layers.LSTM(units, activation=activation))
+        model.add(tf.keras.layers.Dropout(0.2))
+        model.add(tf.keras.layers.Dense(units // 2, activation=activation))
+
     elif model_type == 'dense':
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(64, activation=activation),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
-        ])
+        model.add(tf.keras.layers.Flatten())
+        model.add(tf.keras.layers.Dense(128, activation=activation))
+        model.add(tf.keras.layers.Dropout(0.2))
+        model.add(tf.keras.layers.Dense(64, activation=activation))
+        model.add(tf.keras.layers.Dropout(0.2))
+
     elif model_type == 'mlp_4_layer':
-        hidden_layer_units = params.get('hidden_layer_units', [128, 64, 32, 16])
-        dropout_rate = params.get('dropout', 0.2)
+        model.add(tf.keras.layers.Flatten())
+        dropout_rate = hp.Choice('dropout', values=[0.2, 0.3, 0.4])
 
-        if len(hidden_layer_units) != 4:
-            raise ValueError(f"mlp_4_layer requires 'hidden_layer_units' to be a list of 4 integers, but got {hidden_layer_units}")
+        # Spazio di ricerca per le unità in ogni layer
+        hp_units_1 = hp.Int('units_layer_1', min_value=64, max_value=256, step=32)
+        hp_units_2 = hp.Int('units_layer_2', min_value=32, max_value=128, step=32)
+        hp_units_3 = hp.Int('units_layer_3', min_value=16, max_value=64, step=16)
+        hp_units_4 = hp.Int('units_layer_4', min_value=8, max_value=32, step=8)
 
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=input_shape),
-            tf.keras.layers.Flatten(),
-            # Hidden Layer 1
-            tf.keras.layers.Dense(hidden_layer_units[0], activation=activation),
-            tf.keras.layers.Dropout(dropout_rate),
-            # Hidden Layer 2
-            tf.keras.layers.Dense(hidden_layer_units[1], activation=activation),
-            tf.keras.layers.Dropout(dropout_rate),
-            # Hidden Layer 3
-            tf.keras.layers.Dense(hidden_layer_units[2], activation=activation),
-            tf.keras.layers.Dropout(dropout_rate),
-            # Hidden Layer 4
-            tf.keras.layers.Dense(hidden_layer_units[3], activation=activation),
-            tf.keras.layers.Dropout(dropout_rate),
-            # Output Layer
-            tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation='softmax' if num_classes > 2 else 'sigmoid')
-        ])
+        # Costruzione dei 4 layer nascosti
+        model.add(tf.keras.layers.Dense(units=hp_units_1, activation=activation))
+        model.add(tf.keras.layers.Dropout(dropout_rate))
+        model.add(tf.keras.layers.Dense(units=hp_units_2, activation=activation))
+        model.add(tf.keras.layers.Dropout(dropout_rate))
+        model.add(tf.keras.layers.Dense(units=hp_units_3, activation=activation))
+        model.add(tf.keras.layers.Dropout(dropout_rate))
+        model.add(tf.keras.layers.Dense(units=hp_units_4, activation=activation))
+        model.add(tf.keras.layers.Dropout(dropout_rate))
+
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
-    
+
+    # Output Layer
+    output_activation = 'softmax' if num_classes > 2 else 'sigmoid'
+    model.add(tf.keras.layers.Dense(num_classes if num_classes > 2 else 1, activation=output_activation))
+
     # Compilazione
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-    # Per etichette intere (come quelle prodotte da LabelEncoder), usiamo sparse_categorical_crossentropy
-    # Per il caso binario (0/1), binary_crossentropy è corretto con un output di Dense(1, activation='sigmoid')
     loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
     model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     
-    print(f"✅ Modello {model_type} creato e compilato")
+    print(f"✅ Modello {model_type} (tuner-ready) creato e compilato")
     return model
 
 def train_model(
@@ -170,24 +175,24 @@ def train_model(
     # Usa valori di default
     model_type = model_type or TRAINING_CONFIG["model_type"]
     validation_strategy = validation_strategy or TRAINING_CONFIG["validation_strategy"]
-    params = hyperparams or TRAINING_CONFIG["hyperparameters"] # Ora 'params' è la configurazione singola
+    hp_or_params = hyperparams or TRAINING_CONFIG["hyperparameters"]
     
     print("🚀 Avvio training per singola configurazione")
     print(f"🏗️ Modello: {model_type}")
     print(f"📊 Strategia: {validation_strategy}")
     print(f"📊 Dataset: {X.shape}")
-    print(f"⚙️ Parametri: {params}")
+    print(f"⚙️ Parametri: {hp_or_params}")
 
     training_log = []
     
     try:
         if validation_strategy == "k_fold":
-            accuracy, per_class_losses = _train_k_fold(X, y, model_type, params, track_class_loss)
+            accuracy, per_class_losses = _train_k_fold(X, y, model_type, hp_or_params, track_class_loss)
         else:  # train_test_split
-            accuracy, per_class_losses = _train_split(X, y, model_type, params, track_class_loss)
+            accuracy, per_class_losses = _train_split(X, y, model_type, hp_or_params, track_class_loss)
         
         training_log.append({
-            'params': params,
+            'params': hp_or_params,
             'accuracy': float(accuracy),
         })
 
@@ -196,8 +201,17 @@ def train_model(
         # Addestra modello finale con tutti i dati
         num_classes = max(len(np.unique(y)), np.max(y) + 1)
         input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
-        final_model = build_model(model_type, input_shape, num_classes, params)
-        final_model.fit(X, y, epochs=params['epochs'], batch_size=params['batch_size'], verbose=0)
+        final_model = build_model(model_type, input_shape, num_classes, hp_or_params)
+
+        # Estrai epoche e batch_size sia da hp che da dizionario
+        if isinstance(hp_or_params, dict):
+            epochs = hp_or_params.get('epochs', 10)
+            batch_size = hp_or_params.get('batch_size', 64)
+        else: # È un oggetto kt.HyperParameters
+            epochs = hp_or_params.get('epochs')
+            batch_size = hp_or_params.get('batch_size')
+
+        final_model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0)
 
         print(f"🏆 Modello finale addestrato su tutti i dati.")
 
@@ -206,7 +220,7 @@ def train_model(
         import traceback
         traceback.print_exc()
         training_log.append({
-            'params': params,
+            'params': hp_or_params,
             'accuracy': 0.0,
             'error': str(e),
         })
@@ -248,7 +262,7 @@ def _create_param_combinations(hyperparams: Dict) -> list:
     
     return [dict(zip(keys, combo)) for combo in combinations]
 
-def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
+def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Union[kt.HyperParameters, Dict], track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
     """Training con K-Fold cross validation."""
     # Controlla se la stratificazione è possibile
     class_counts = np.bincount(y)
@@ -284,7 +298,7 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
 
         num_classes = max(len(np.unique(y)), np.max(y) + 1)
         input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
-        model = build_model(model_type, input_shape, num_classes, params)
+        model = build_model(model_type, input_shape, num_classes, hp_or_params)
         
         callbacks = []
         if track_class_loss:
@@ -300,9 +314,17 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
         class_weight_dict = dict(enumerate(class_weights))
         print("  ⚖️  Applying class weights to handle imbalance.")
 
+        # Estrai epoche e batch_size sia da hp che da dizionario
+        if isinstance(hp_or_params, dict):
+            epochs = hp_or_params.get('epochs', 10)
+            batch_size = hp_or_params.get('batch_size', 64)
+        else: # È un oggetto kt.HyperParameters
+            epochs = hp_or_params.get('epochs')
+            batch_size = hp_or_params.get('batch_size')
+
         model.fit(X_train, y_train, 
-                 epochs=params['epochs'], 
-                 batch_size=params['batch_size'], 
+                 epochs=epochs,
+                 batch_size=batch_size,
                  callbacks=callbacks,
                  class_weight=class_weight_dict,
                  verbose=0)
@@ -316,7 +338,7 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, t
     
     return np.mean(accuracies), last_fold_losses
 
-def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
+def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Union[kt.HyperParameters, Dict], track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
     """Training con train/test split."""
     test_size = TRAINING_CONFIG["test_size"]
 
@@ -351,7 +373,7 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, tr
 
     num_classes = max(len(np.unique(y)), np.max(y) + 1)
     input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
-    model = build_model(model_type, input_shape, num_classes, params)
+    model = build_model(model_type, input_shape, num_classes, hp_or_params)
     
     callbacks = []
     loss_logger = None
@@ -368,9 +390,16 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, params: Dict, tr
     class_weight_dict = dict(enumerate(class_weights))
     print("  ⚖️  Applying class weights to handle imbalance.")
 
+    if isinstance(hp_or_params, dict):
+        epochs = hp_or_params.get('epochs', 10)
+        batch_size = hp_or_params.get('batch_size', 64)
+    else: # È un oggetto kt.HyperParameters
+        epochs = hp_or_params.get('epochs')
+        batch_size = hp_or_params.get('batch_size')
+
     model.fit(X_train, y_train,
-             epochs=params['epochs'],
-             batch_size=params['batch_size'],
+             epochs=epochs,
+             batch_size=batch_size,
              validation_data=(X_test, y_test),
              callbacks=callbacks,
              class_weight=class_weight_dict,

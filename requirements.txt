@@ -5,4 +5,5 @@ tensorflow>=2.15
 matplotlib>=3.7
 seaborn>=0.12
 tqdm>=4.66
+keras-tuner>=1.4.0
 

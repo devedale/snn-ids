@@ -25,11 +25,16 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Any
 import itertools
+import tensorflow as tf
+from sklearn.metrics import classification_report, f1_score, recall_score, accuracy_score
+from sklearn.model_selection import train_test_split
 
 # Import existing modules
 sys.path.append(os.path.abspath('.'))
-from benchmark import SNNIDSBenchmark
 from config import PREPROCESSING_CONFIG, DATA_CONFIG
+from preprocessing.process import preprocess_pipeline
+from training.train import build_model
+import keras_tuner as kt
 
 class MLPAnalysis:
     """
@@ -41,146 +46,149 @@ class MLPAnalysis:
         self.sample_size = sample_size or PREPROCESSING_CONFIG['sample_size']
         self.data_path = data_path or DATA_CONFIG['dataset_path']
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = f"mlp_analysis_results_{self.timestamp}"
+        self.output_dir = f"/tmp/mlp_analysis_{self.timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # The core runner is the trusted benchmark class
-        self.runner = SNNIDSBenchmark(config_override={
-            'sample_size': self.sample_size,
-            'data_path': self.data_path
-        })
-
         print("="*70)
-        print("🔬 MLP ANALYSIS BENCHMARK INITIALIZED (Refactored) 🔬")
+        print("🔬 MLP HYPERBAND ANALYSIS INITIALIZED 🔬")
         print("="*70)
         print(f"📁 Output Directory: {self.output_dir}")
         print(f"💾 Sample Size: {self.sample_size}")
-        print(f"✅ Using SNNIDSBenchmark for core logic.")
         print("="*70)
 
     def run_analysis(self):
         """
-        Executes the full analysis pipeline.
+        Executes the full analysis pipeline using KerasTuner's Hyperband.
         """
-        print("\n🚀 STARTING HYPERPARAMETER SEARCH FOR 4-LAYER MLP...")
+        print("\n🚀 STARTING HYPERBAND SEARCH FOR 4-LAYER MLP...")
         start_time = time.time()
 
-        # Define a smaller, more focused hyperparameter grid as requested
-        hyperparam_grid = {
-            'learning_rate': [0.001, 0.005],
-            'batch_size': [64],
-            'activation': ['relu', 'tanh'],
-            'hidden_layer_units': [[128, 64, 32, 16]],
-            'dropout': [0.2, 0.4]
-        }
-
-        keys, values = zip(*hyperparam_grid.items())
-        hyperparam_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-
-        print(f"🔍 Found {len(hyperparam_combinations)} hyperparameter combinations to test.")
-
-        all_results = []
-        for i, params in enumerate(hyperparam_combinations):
-            print(f"\n--- Running Test {i+1}/{len(hyperparam_combinations)} ---")
-
-            test_config = {
-                'model_type': 'mlp_4_layer',
-                'hyperparameters': {**params, 'epochs': 30},
-                'output_dir': self.output_dir # Pass the main output dir to the runner
-            }
-
-            # Use the trusted runner
-            result = self.runner._run_single_configuration(test_config)
-            all_results.append(result)
-
-        total_time = time.time() - start_time
-        print(f"\n✅ Hyperparameter search finished in {total_time:.2f} seconds.")
-
-        # Identify best configurations and save reports
-        self._generate_and_save_reports(all_results, total_time)
-
-        print(f"\n🎉 MLP Analysis Benchmark Complete!")
-        print(f"📁 All results have been saved in: {self.output_dir}")
-
-    def _generate_and_save_reports(self, all_results: List[Dict], total_time: float):
-        """Analyzes all results, finds the top 10, and saves reports."""
-        successful_runs = [r for r in all_results if r.get('status') == 'success']
-        if not successful_runs:
-            print("❌ No successful runs completed. Cannot generate reports.")
+        # 1. Preprocessing
+        print("\n🧪 PREPROCESSING...")
+        try:
+            X, y, label_encoder = preprocess_pipeline(
+                data_path=self.data_path,
+                sample_size=self.sample_size
+            )
+            print(f"✅ Preprocessing complete. Loaded data shape: {X.shape}")
+        except Exception as e:
+            print(f"❌ Fatal error during preprocessing: {e}")
             return
 
-        # Sort by accuracy (descending)
-        sorted_runs = sorted(successful_runs, key=lambda r: r.get('best_accuracy', 0), reverse=True)
+        # 2. Hyperband Tuner Setup
+        num_classes = len(np.unique(y))
+        input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
 
-        top_10_runs = sorted_runs[:10]
+        # Wrapper per build_model per passare argomenti extra
+        def model_builder(hp):
+            return build_model(
+                model_type='mlp_4_layer',
+                input_shape=input_shape,
+                num_classes=num_classes,
+                hp_or_params=hp
+            )
 
-        print(f"\n🏆 Top {len(top_10_runs)} Models Found 🏆")
+        tuner = kt.Hyperband(
+            model_builder,
+            objective='val_accuracy',
+            max_epochs=30,
+            factor=3,
+            directory=self.output_dir,
+            project_name='snn_ids_hyperband',
+            overwrite=True
+        )
 
-        # --- Create CSV Report ---
+        # 3. Esecuzione della ricerca
+        print("\n🔍 Starting Hyperband search...")
+        tuner.search(X, y, validation_split=0.2, callbacks=[tf.keras.callbacks.EarlyStopping(patience=5)])
+
+        total_time = time.time() - start_time
+        print(f"\n✅ Hyperband search finished in {total_time:.2f} seconds.")
+
+        # 4. Estrazione e salvataggio dei risultati
+        self._generate_and_save_reports(tuner, X, y, total_time)
+
+        print(f"\n🎉 MLP Analysis with Hyperband Complete!")
+        print(f"📁 All results have been saved in: {self.output_dir}")
+
+    def _generate_and_save_reports(self, tuner: kt.Tuner, X: np.ndarray, y: np.ndarray, total_time: float):
+        """Analyzes tuner results, evaluates the best model, and saves reports."""
+        print("\n📊 Generating and saving reports...")
+
+        # --- Get Best Hyperparameters and Model ---
+        best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+        best_model = tuner.get_best_models(num_models=1)[0]
+
+        if not best_model:
+            print("❌ No best model found by the tuner. Cannot generate reports.")
+            return
+
+        # --- Evaluate Best Model on a Hold-out Test Set ---
+        print("\n🔬 Evaluating the best model on a hold-out test set...")
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+        # Re-train the model on the full training set for final evaluation
+        # This ensures the model is trained on as much data as possible
+        final_model = tuner.hypermodel.build(best_hps)
+        final_model.fit(X_train, y_train, epochs=30, validation_data=(X_test, y_test), verbose=0)
+
+        y_pred_probs = final_model.predict(X_test)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+
+        accuracy = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, average='weighted')
+        recall = recall_score(y_test, y_pred, average='weighted')
+
+        print(f"  - Final Test Accuracy: {accuracy:.4f}")
+        print(f"  - Final Test F1-Score (Weighted): {f1:.4f}")
+        print(f"  - Final Test Recall (Weighted): {recall:.4f}")
+
+        # --- Create TXT Summary ---
+        txt_path = os.path.join(self.output_dir, "hyperband_summary.txt")
+        with open(txt_path, 'w') as f:
+            f.write("="*80 + "\n")
+            f.write("🔬 MLP HYPERBAND ANALYSIS SUMMARY 🔬\n")
+            f.write("="*80 + "\n\n")
+            f.write(f"Timestamp: {self.timestamp}\n")
+            f.write(f"Total Search Runtime: {total_time:.2f} seconds\n\n")
+
+            f.write("-" * 80 + "\n")
+            f.write("🏆 BEST MODEL - FINAL EVALUATION 🏆\n")
+            f.write("-" * 80 + "\n\n")
+            f.write(f"Accuracy: {accuracy:.6f}\n")
+            f.write(f"F1-Score (Weighted): {f1:.6f}\n")
+            f.write(f"Recall (Weighted): {recall:.6f}\n\n")
+
+            f.write("Hyperparameters:\n")
+            f.write(json.dumps(best_hps.values, indent=2))
+            f.write("\n\n")
+
+            f.write("Classification Report:\n")
+            f.write(classification_report(y_test, y_pred))
+            f.write("\n")
+
+        print(f"📄 Benchmark summary saved to: {txt_path}")
+
+        # --- Create CSV with Top 10 Trials ---
+        trials = tuner.oracle.get_best_trials(num_trials=10)
         report_data = []
-        for rank, run in enumerate(top_10_runs, 1):
-            config = run.get('config', {})
-            hyperparams = config.get('hyperparameters', {})
-            eval_report = run.get('evaluation', {}).get('report', {})
-            basic_metrics = eval_report.get('basic_metrics', {})
-
-            # Calculate mean F1 and Recall
-            mean_f1 = np.mean(basic_metrics.get('f1_per_class', [0]))
-            mean_recall = np.mean(basic_metrics.get('recall_per_class', [0]))
-
+        for rank, trial in enumerate(trials, 1):
             row = {
                 'rank': rank,
-                'run_id': run.get('run_id'),
-                'accuracy': run.get('best_accuracy', 0),
-                'mean_f1_score': mean_f1,
-                'mean_recall': mean_recall,
-                'learning_rate': hyperparams.get('learning_rate'),
-                'batch_size': hyperparams.get('batch_size'),
-                'activation': hyperparams.get('activation'),
-                'hidden_layer_units': str(hyperparams.get('hidden_layer_units')),
-                'dropout': hyperparams.get('dropout'),
-                'training_time_s': run.get('training_time'),
-                'confusion_matrix_path': os.path.join(run.get('evaluation', {}).get('evaluation_dir', ''), 'confusion_matrix_detailed.png')
+                'trial_id': trial.trial_id,
+                'score': trial.score,
+                **trial.hyperparameters.values
             }
             report_data.append(row)
 
         if not report_data:
-            print("⚠️ No data to generate CSV report.")
+            print("⚠️ No trial data to generate CSV report.")
             return
 
         df = pd.DataFrame(report_data)
-        csv_path = os.path.join(self.output_dir, "top_10_models_summary.csv")
+        csv_path = os.path.join(self.output_dir, "top_10_hyperband_trials.csv")
         df.to_csv(csv_path, index=False)
-        print(f"📊 Top 10 models summary saved to: {csv_path}")
-
-        # --- Create TXT Summary ---
-        txt_path = os.path.join(self.output_dir, "benchmark_summary.txt")
-        with open(txt_path, 'w') as f:
-            f.write("="*80 + "\n")
-            f.write("🔬 MLP ANALYSIS BENCHMARK SUMMARY 🔬\n")
-            f.write("="*80 + "\n\n")
-            f.write(f"Timestamp: {self.timestamp}\n")
-            f.write(f"Total Runtime: {total_time:.2f} seconds\n")
-            f.write(f"Total Configurations Tested: {len(all_results)}\n")
-            f.write(f"Successful Runs: {len(successful_runs)}\n\n")
-
-            f.write("-" * 80 + "\n")
-            f.write("🏆 BEST CONFIGURATION 🏆\n")
-            f.write("-" * 80 + "\n\n")
-
-            best_run = top_10_runs[0]
-            f.write(f"Rank: 1\n")
-            f.write(f"Run ID: {best_run.get('run_id')}\n")
-            f.write(f"Accuracy: {best_run.get('best_accuracy', 0):.6f}\n")
-            f.write(f"Mean F1-Score: {report_data[0]['mean_f1_score']:.6f}\n")
-            f.write(f"Mean Recall: {report_data[0]['mean_recall']:.6f}\n\n")
-            f.write("Hyperparameters:\n")
-            f.write(json.dumps(best_run.get('config', {}).get('hyperparameters', {}), indent=2))
-            f.write("\n\n")
-            f.write(f"Find detailed evaluation report and confusion matrix in:\n")
-            f.write(f"  {os.path.dirname(report_data[0]['confusion_matrix_path'])}\n")
-
-        print(f"📄 Benchmark summary saved to: {txt_path}")
+        print(f"📊 Top 10 trials summary saved to: {csv_path}")
 
 
 def main():

@@ -71,15 +71,21 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
         hp = kt.HyperParameters()
 
         # Imposta i valori di default se non presenti nel dizionario
-        hp.Fixed('learning_rate', params.get('learning_rate', 0.001))
-        hp.Fixed('activation', params.get('activation', 'relu'))
-        hp.Fixed('dropout', params.get('dropout', 0.2))
+        # Estrai il primo elemento se il valore è una lista, per compatibilità con la config
+        def get_value(param_name, default_value):
+            value = params.get(param_name, default_value)
+            return value[0] if isinstance(value, list) else value
+
+        hp.Fixed('learning_rate', get_value('learning_rate', 0.001))
+        hp.Fixed('activation', get_value('activation', 'relu'))
+        hp.Fixed('dropout', get_value('dropout', 0.2))
 
         if model_type in ['gru', 'lstm']:
-            hp.Fixed('units', params.get('gru_units', params.get('lstm_units', 64)))
+            units = get_value('gru_units', get_value('lstm_units', 64))
+            hp.Fixed('units', units)
 
         if model_type == 'mlp_4_layer':
-            hidden_units = params.get('hidden_layer_units', [128, 64, 32, 16])
+            hidden_units = get_value('hidden_layer_units', [128, 64, 32, 16])
             hp.Fixed('units_layer_1', hidden_units[0])
             hp.Fixed('units_layer_2', hidden_units[1])
             hp.Fixed('units_layer_3', hidden_units[2])

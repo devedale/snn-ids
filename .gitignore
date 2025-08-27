@@ -211,3 +211,6 @@ stats_output/
 # File di visualizzazione
 viz_output/
 *.viz
+
+# Archivi di output
+*.zip

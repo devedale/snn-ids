@@ -136,7 +136,6 @@ data/
 *.parquet
 *.h5
 *.hdf5
-*.pkl
 *.pickle
 
 # Modelli salvati

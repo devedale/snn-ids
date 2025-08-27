@@ -72,6 +72,14 @@ class MLPAnalysis:
                 sample_size=self.sample_size
             )
             print(f"✅ Preprocessing complete. Loaded data shape: {X.shape}")
+
+            # Reshape data for the MLP model (pre-flattening)
+            if len(X.shape) == 3:
+                print(f"  -> Reshaping data from {X.shape} to 2D for MLP...")
+                n_samples = X.shape[0]
+                X = X.reshape(n_samples, -1)
+                print(f"  -> New data shape: {X.shape}")
+
         except Exception as e:
             print(f"❌ Fatal error during preprocessing: {e}")
             return

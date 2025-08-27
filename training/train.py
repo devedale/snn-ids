@@ -78,7 +78,6 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
 
         hp.Fixed('learning_rate', get_value('learning_rate', 0.001))
         hp.Fixed('activation', get_value('activation', 'relu'))
-        hp.Fixed('dropout', get_value('dropout', 0.2))
 
         if model_type in ['gru', 'lstm']:
             units = get_value('gru_units', get_value('lstm_units', 64))
@@ -122,7 +121,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
         model.add(tf.keras.layers.Dropout(0.2))
 
     elif model_type == 'mlp_4_layer':
-        model.add(tf.keras.layers.Flatten())
+        # The data is pre-flattened in mlp-analysis.py, so no Flatten layer here.
 
         # Spazio di ricerca per le unità in ogni layer
         hp_units_1 = hp.Int('units_layer_1', min_value=64, max_value=256, step=32)

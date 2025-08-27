@@ -26,20 +26,28 @@ class ModelTrainer:
     """
     A class to orchestrate the model training and validation process.
     """
-    def __init__(self, model_type: str, config: Dict = None):
+    def __init__(self, model_type: str, config: Dict = None, hyperparams_override: Dict = None):
         """
         Initializes the ModelTrainer.
 
         Args:
             model_type: The type of model to train (e.g., 'gru', 'lstm').
             config: The training configuration dictionary (defaults to TRAINING_CONFIG).
+            hyperparams_override: A dictionary of hyperparameters to use instead of
+                                  the ones from the config file. This is crucial for
+                                  progressive tuning.
         """
         self.model_type = model_type
         self.config = config or TRAINING_CONFIG
         self.model_builder = get_model_builder(model_type)
-        self.hyperparams = get_model_hyperparameters(self.config, model_type)
+
+        # This is the corrected logic. It correctly merges common and model-specific HPs
+        # regardless of whether they come from the main config or an override.
+        source_config = {'hyperparameters': hyperparams_override} if hyperparams_override else self.config
+        self.hyperparams = get_model_hyperparameters(source_config, model_type)
+
         print(f"🚀 ModelTrainer initialized for model type: {self.model_type}")
-        print(f"⚙️ Hyperparameters: {self.hyperparams}")
+        print(f"⚙️ Corrected Hyperparameters: {self.hyperparams}")
 
     def _get_builder_params(self) -> Dict[str, Any]:
         """

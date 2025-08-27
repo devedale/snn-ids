@@ -125,7 +125,8 @@ TRAINING_CONFIG = {
                 "units": [64],
                 "activation": ["tanh"],
                 "learning_rate": [0.01], # Unconventionally high, but proven to work for this model
-                "epochs": [15]
+                "epochs": [15],
+                "batch_size": [64] # Optimal batch size for GRU
             },
             "lstm": {
                 "units": [64],

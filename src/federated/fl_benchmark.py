@@ -12,12 +12,12 @@ import time
 from typing import Dict, Any, List, Tuple
 import numpy as np
 
-from config import PREPROCESSING_CONFIG, DATA_CONFIG, TRAINING_CONFIG, HOMOMORPHIC_CONFIG, FEDERATED_CONFIG
-from preprocessing.process import preprocess_pipeline
-from training.train import build_model
-from federated.fl_simulation import FedAvgServer, FedClient, split_dataset_iid
-from evaluation.metrics import evaluate_model_comprehensive
-from federated.he import HEContext
+from src.config import PREPROCESSING_CONFIG, DATA_CONFIG, TRAINING_CONFIG, HOMOMORPHIC_CONFIG, FEDERATED_CONFIG
+from src.preprocessing.process import preprocess_pipeline
+from src.training.train import build_model
+from src.federated.fl_simulation import FedAvgServer, FedClient, split_dataset_iid
+from src.evaluation.metrics import evaluate_model_comprehensive
+from src.federated.he import HEContext
 
 
 def _build_keras_builder(model_type: str, params: Dict[str, Any]):

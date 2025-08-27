@@ -17,9 +17,6 @@ from datetime import datetime
 from typing import Dict, Any, List
 import itertools
 
-# Ensure the src directory is in the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
-
 # Import the refactored components
 from config import PREPROCESSING_CONFIG, DATA_CONFIG, TRAINING_CONFIG
 from src.preprocessing import preprocess_pipeline
@@ -91,8 +88,11 @@ class SNNIDSBenchmark:
             print("\n🏋️ TRAINING")
             train_start = time.time()
 
-            # Use the refactored ModelTrainer
-            trainer = ModelTrainer(model_type=model_type)
+            # Use the refactored ModelTrainer, passing hyperparameter overrides
+            trainer = ModelTrainer(
+                model_type=model_type,
+                hyperparams_override=test_config.get('hyperparameters')
+            )
             # The trainer first evaluates the model using the validation strategy
             # to get a performance metric.
             validation_accuracy, class_loss_data = trainer.train_and_evaluate(X, y)

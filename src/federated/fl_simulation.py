@@ -15,7 +15,7 @@ di gradienti selezionati o, in alternativa, su feature sensibili in pre-processi
 from typing import Dict, Any, List, Tuple
 import numpy as np
 
-from federated.he import HEContext, HEEncryptor
+from src.federated.he import HEContext, HEEncryptor
 
 
 def split_dataset_iid(X: np.ndarray, y: np.ndarray, num_clients: int) -> List[Tuple[np.ndarray, np.ndarray]]:

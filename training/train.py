@@ -43,9 +43,21 @@ class PerClassLossLogger(tf.keras.callbacks.Callback):
 
             if X_class.shape[0] > 0:
                 # Evaluate loss on the data for this class
-                loss, _ = self.model.evaluate(X_class, y_class, verbose=0)
-                self.losses[class_idx].append(loss)
-                print(f"  - Class {class_idx}: Loss = {loss:.4f}")
+                valid = False
+                loss_value = None
+                try:
+                    loss_value, _ = self.model.evaluate(X_class, y_class, verbose=0)
+                    if np.isfinite(loss_value):
+                        self.losses[class_idx].append(float(loss_value))
+                        valid = True
+                    else:
+                        self.losses[class_idx].append(None)
+                except Exception:
+                    self.losses[class_idx].append(None)
+                if valid:
+                    print(f"  - Class {class_idx}: Loss = {loss_value:.4f}")
+                else:
+                    print(f"  - Class {class_idx}: Loss non disponibile (NaN/Inf/errore)")
             else:
                 # Handle cases where a class might not be in a fold
                 self.losses[class_idx].append(None)
@@ -309,7 +321,8 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: U
         
         callbacks = []
         if track_class_loss:
-            loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y)))
+            # Traccia solo le classi effettivamente presenti in questo fold
+            loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y_train)))
             callbacks.append(loss_logger)
 
         # Calculate class weights to handle imbalance
@@ -388,7 +401,8 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Un
     callbacks = []
     loss_logger = None
     if track_class_loss:
-        loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y)))
+        # Traccia solo le classi presenti nel training set corrente
+        loss_logger = PerClassLossLogger(X_train, y_train, class_indices=list(np.unique(y_train)))
         callbacks.append(loss_logger)
 
     # Calculate class weights to handle imbalance

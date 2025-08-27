@@ -367,9 +367,41 @@ def plot_class_loss_over_epochs(
     Returns:
         Path al file del grafico salvato.
     """
-    num_classes = len(class_losses)
-    if num_classes == 0:
-        return ""
+    # Assicura che la directory di output esista
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Filtra classi senza alcun dato valido (tutti None/NaN/inf)
+    filtered_class_losses = {}
+    for class_idx, losses in class_losses.items():
+        cleaned = []
+        for loss in losses:
+            if loss is None:
+                continue
+            try:
+                # Escludi NaN/inf
+                if isinstance(loss, (float, int)) and np.isfinite(loss):
+                    cleaned.append(float(loss))
+            except Exception:
+                continue
+        filtered_class_losses[class_idx] = cleaned
+    # Mantieni solo classi con almeno un dato
+    filtered_class_losses = {
+        class_idx: losses for class_idx, losses in filtered_class_losses.items() if len(losses) > 0
+    }
+
+    # Se non c'è nessuna classe con dati, crea un placeholder informativo
+    if len(filtered_class_losses) == 0:
+        os.makedirs(output_dir, exist_ok=True)
+        fig = plt.figure(figsize=(10, 4))
+        plt.text(0.5, 0.5, 'Nessun dato di loss per classe disponibile', ha='center', va='center', fontsize=14)
+        plt.axis('off')
+        plot_path = os.path.join(output_dir, "class_loss_vs_epochs_subplots.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  ⚠️ Nessun dato valido per loss per classe. Creato placeholder: {plot_path}")
+        return plot_path
+
+    num_classes = len(filtered_class_losses)
 
     # Determine grid size (e.g., 5x5 grid for up to 25 classes)
     ncols = 5
@@ -381,20 +413,14 @@ def plot_class_loss_over_epochs(
     hyperparams_str = _format_hyperparameters_for_title(model_config)
     fig.suptitle(f'Training Loss per Classe vs. Epoche\n{hyperparams_str}', fontsize=20, fontweight='bold')
 
-    for i, (class_idx, losses) in enumerate(class_losses.items()):
+    valid_series = 0
+    for i, (class_idx, losses) in enumerate(filtered_class_losses.items()):
         ax = axes[i]
 
-        # Filter out None values in case a class was missing in a fold
-        valid_losses = [l for l in losses if l is not None]
-        if not valid_losses:
-            ax.text(0.5, 0.5, 'N/A', ha='center', va='center', fontsize=12, alpha=0.5)
-            ax.set_title(f"Classe: {class_names[class_idx]} (No Data)", fontsize=10)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            continue
-
-        epochs = range(1, len(valid_losses) + 1)
-        ax.plot(epochs, valid_losses, marker='o', linestyle='-', markersize=4)
+        if len(losses) > 0:
+            epochs = range(1, len(losses) + 1)
+            ax.plot(epochs, losses, marker='o', linestyle='-', markersize=4)
+            valid_series += 1
 
         class_name = class_names[class_idx] if class_idx < len(class_names) else f"Index {class_idx}"
         ax.set_title(f"Classe: {class_name}", fontsize=10)
@@ -414,7 +440,7 @@ def plot_class_loss_over_epochs(
     plt.savefig(plot_path, dpi=300)
     plt.close(fig)
 
-    print(f"  📉 Grafico loss per classe (subplots): {plot_path}")
+    print(f"  📉 Grafico loss per classe (subplots): {plot_path} | serie valide: {valid_series}/{num_classes}")
 
     return plot_path
 

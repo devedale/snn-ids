@@ -171,7 +171,7 @@ class MLPAnalysis:
             print(f"  - Accuracy: {accuracy:.4f}, F1 (Weighted): {f1:.4f}")
 
             # --- Detailed Evaluation for Rank #1 ---
-            viz_paths = {}
+            viz_paths = []
             if rank == 1:
                 print("  - Generating detailed visualizations for the best model...")
                 eval_dir = os.path.join(self.output_dir, "best_model_visualizations")
@@ -184,9 +184,12 @@ class MLPAnalysis:
                     model, X_test, y_test, label_encoder.classes_, eval_dir, model_config,
                     class_loss_data=self.loss_logger.losses
                 )
-                viz_paths = detailed_report.get('visualizations', {})
+                viz_paths = detailed_report.get('visualizations', [])
 
             # --- Collect Data for Reports ---
+            # Estrai path della confusion matrix dettagliata, se presente
+            cm_path = next((p for p in viz_paths if p.endswith('confusion_matrix_detailed.png')), 'N/A') if viz_paths else 'N/A'
+
             report_row = {
                 'rank': rank,
                 'accuracy': accuracy,
@@ -194,7 +197,7 @@ class MLPAnalysis:
                 'recall_weighted': recall,
                 'precision_weighted': precision,
                 **hps.values,
-                'visualizations_path': viz_paths.get('confusion_matrix_detailed.png', 'N/A')
+                'visualizations_path': cm_path
             }
             all_report_data.append(report_row)
 

@@ -214,7 +214,8 @@ class SNNIDSBenchmark:
             print("    ⚠️ Test set vuoto, uso tutto il dataset per la valutazione.")
             X_test, y_test = X, y
 
-        class_names = label_encoder.classes_.tolist() if hasattr(label_encoder, 'classes_') else []
+        # Passa un array numpy per compatibilità con funzioni che usano .tolist()
+        class_names = label_encoder.classes_ if hasattr(label_encoder, 'classes_') else np.array([])
 
         # Crea nome directory descrittivo con iperparametri
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -386,7 +386,11 @@ class BestConfigBenchmark:
             'sample_size': self.sample_size,
             'data_path': self.data_path,
             'model_type': model_type,  # Solo il modello specificato
-            'hyperparameters': hyperparams
+            'hyperparameters': hyperparams,
+            # Inoltra la cartella di output del benchmark best-config così che
+            # le visualizzazioni (CM dettagliate, loss per classe, ecc.)
+            # vengano salvate dentro questa run
+            'output_dir': self.output_dir
         }
         
         # Usa direttamente _run_single_configuration per evitare il loop su tutti i modelli
@@ -455,6 +459,16 @@ class BestConfigBenchmark:
             json.dump(report, f, indent=2, default=str)
         print(f"💾 Rapporto completo: {json_file}")
         
+        # Indice visualizzazioni (mappa fase -> path valutazione e PNG principali)
+        try:
+            viz_index = self._build_visualization_index(report)
+            viz_index_file = os.path.join(self.output_dir, "visualizations_index.json")
+            with open(viz_index_file, 'w') as f:
+                json.dump(viz_index, f, indent=2, default=str)
+            print(f"🖼️ Indice visualizzazioni: {viz_index_file}")
+        except Exception as e:
+            print(f"⚠️ Impossibile creare indice visualizzazioni: {e}")
+
         # Summary JSON
         summary = {
             'timestamp': report['timestamp'],
@@ -546,8 +560,69 @@ class BestConfigBenchmark:
                 f.write(f"  {phase_name}:\n")
                 f.write(f"    🧪 Test: {stats['successful_tests']}/{stats['tests_run']}\n")
                 f.write(f"    🎯 Miglior accuracy: {stats['best_accuracy']:.6f}\n\n")
+
+            # Riferimenti alle visualizzazioni (CM dettagliata, Loss per classe)
+            try:
+                viz_index = self._build_visualization_index(report)
+                f.write("🖼️ DOVE TROVARE LE VISUALIZZAZIONI:\n")
+                f.write("-" * 30 + "\n")
+                for phase, info in viz_index.items():
+                    f.write(f"  {phase}:\n")
+                    if 'evaluation_dir' in info and info['evaluation_dir']:
+                        f.write(f"    📂 Eval dir: {info['evaluation_dir']}\n")
+                    if 'artifacts' in info and info['artifacts']:
+                        for art in info['artifacts']:
+                            f.write(f"    • {art}\n")
+                f.write("\n")
+            except Exception:
+                pass
         
         print(f"📄 Rapporto testuale: {report_file}")
+
+    def _build_visualization_index(self, report: Dict) -> Dict[str, Any]:
+        """Crea un indice sintetico dei path delle visualizzazioni più importanti per ciascuna fase."""
+        viz_index: Dict[str, Any] = {}
+
+        def extract_info(run_result: Dict) -> Dict[str, Any]:
+            eval_block = run_result.get('evaluation', {}) if run_result else {}
+            evaluation_dir = eval_block.get('evaluation_dir')
+            report_block = eval_block.get('report', {}) if isinstance(eval_block, dict) else {}
+            visualizations = report_block.get('visualizations', []) if isinstance(report_block, dict) else []
+            # Seleziona artefatti principali se presenti
+            preferred = [
+                'confusion_matrix_detailed.png',
+                'confusion_matrix_cybersecurity.png',
+                'class_loss_vs_epochs_subplots.png',
+                'accuracy_per_class.png'
+            ]
+            selected = []
+            for p in visualizations:
+                base = os.path.basename(p)
+                if base in preferred:
+                    selected.append(p)
+            return {
+                'evaluation_dir': evaluation_dir,
+                'artifacts': selected
+            }
+
+        # Baseline
+        if isinstance(report.get('detailed_results', {}).get('baseline'), dict):
+            viz_index['baseline'] = extract_info(report['detailed_results']['baseline'])
+
+        # Fasi di tuning: prendi il best della fase, se disponibile
+        for phase in ['learning_rate', 'gru_units', 'epochs', 'batch_size', 'regularization']:
+            phase_data = report.get('detailed_results', {}).get(phase)
+            if isinstance(phase_data, dict) and 'all_results' in phase_data:
+                successful = [r for r in phase_data['all_results'] if r.get('status') == 'success']
+                best = max(successful, key=lambda x: x.get('best_accuracy', 0), default=None)
+                if best:
+                    viz_index[phase] = extract_info(best)
+
+        # Finale ottimizzato
+        if isinstance(report.get('detailed_results', {}).get('final_optimized'), dict):
+            viz_index['final_optimized'] = extract_info(report['detailed_results']['final_optimized'])
+
+        return viz_index
 
     def _save_top_models_summary(self, report: Dict):
         """Salva un riepilogo dei top 10 modelli ordinati per accuratezza."""

@@ -108,7 +108,7 @@ class MLPAnalysis:
 
         tuner = kt.Hyperband(
             model_builder,
-            objective='val_auc',
+            objective='val_accuracy',
             max_epochs=30,
             factor=3,
             directory=self.output_dir,

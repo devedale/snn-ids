@@ -148,7 +148,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
     model.compile(
         optimizer=optimizer,
         loss=loss,
-        metrics=['accuracy', tf.keras.metrics.AUC(name='auc')]
+        metrics=['accuracy']
     )
     
     print(f"✅ Modello {model_type} (tuner-ready) creato e compilato")

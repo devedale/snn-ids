@@ -145,10 +145,15 @@ def build_mlp_4_layer_model(
     units_layer_3: TunableInt = 64,
     units_layer_4: TunableInt = 32,
     activation: TunableChoice = 'relu',
-    learning_rate: TunableFloat = 0.001
+    learning_rate: TunableFloat = 0.001,
+    normalization_mean: List[float] = None,
+    normalization_variance: List[float] = None
 ) -> tf.keras.Model:
     """
     Builds and compiles a 4-hidden-layer MLP model.
+    This model can optionally include a normalization layer if the mean and
+    variance of the training data are provided. This is crucial for ensuring
+    that data is scaled consistently during training and inference.
     NOTE: This model expects flattened (2D) input data.
 
     Args:
@@ -160,18 +165,33 @@ def build_mlp_4_layer_model(
         units_layer_4: Number of units in the fourth hidden layer.
         activation: The activation function for the hidden layers.
         learning_rate: The learning rate for the Adam optimizer.
+        normalization_mean: The mean of the training features for normalization.
+        normalization_variance: The variance of the training features for normalization.
 
     Returns:
         A compiled Keras model.
     """
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=input_shape, name="input_layer"),
+    layers = [tf.keras.layers.Input(shape=input_shape, name="input_layer")]
+
+    # If normalization stats are provided, add the normalization layer first.
+    if normalization_mean is not None and normalization_variance is not None:
+        norm_layer = tf.keras.layers.Normalization(
+            mean=normalization_mean,
+            variance=normalization_variance,
+            name="normalization_layer"
+        )
+        layers.append(norm_layer)
+        print("✅ Internal normalization layer added to MLP model.")
+
+    layers.extend([
         tf.keras.layers.Dense(units=units_layer_1, activation=activation, name="dense_1"),
         tf.keras.layers.Dense(units=units_layer_2, activation=activation, name="dense_2"),
         tf.keras.layers.Dense(units=units_layer_3, activation=activation, name="dense_3"),
         tf.keras.layers.Dense(units=units_layer_4, activation=activation, name="dense_4"),
         tf.keras.layers.Dense(num_classes, activation='softmax', name="output_layer")
-    ], name="MLP_4_Layer_Model")
+    ])
+
+    model = tf.keras.Sequential(layers, name="MLP_4_Layer_Model")
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     model.compile(

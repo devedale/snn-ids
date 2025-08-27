@@ -93,15 +93,30 @@ class ModelTrainer:
         """
         print("🏆 Training final model on the entire dataset...")
 
-        # Prepare data (scaling and reshaping)
-        X_scaled, _ = scale_data(X, X) # Use a copy of X for the 'val' set
-        X_prepared = prepare_data_for_model(X_scaled, self.model_type)
+        builder_params = self._get_builder_params()
+
+        # Special handling for MLP to bake normalization into the model
+        if self.model_type == 'mlp_4_layer':
+            print("  Preparing data for MLP final training with internal normalization.")
+            X_prepared = prepare_data_for_model(X, self.model_type)
+
+            # Calculate normalization stats from the training data
+            norm_mean = np.mean(X_prepared, axis=0).tolist()
+            norm_variance = np.var(X_prepared, axis=0).tolist()
+
+            # Add stats to builder parameters
+            builder_params['normalization_mean'] = norm_mean
+            builder_params['normalization_variance'] = norm_variance
+        else:
+            # For other models, use standard external scaling
+            print("  Preparing data with standard external scaling.")
+            X_scaled, _ = scale_data(X, X) # Use a copy of X for the 'val' set
+            X_prepared = prepare_data_for_model(X_scaled, self.model_type)
 
         num_classes = len(np.unique(y))
         input_shape = X_prepared.shape[1:]
 
-        # Get only the parameters relevant for the model builder
-        builder_params = self._get_builder_params()
+        # Build the model with the appropriate parameters
         model = self.model_builder(input_shape=input_shape, num_classes=num_classes, **builder_params)
 
         # Get training parameters

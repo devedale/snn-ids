@@ -125,7 +125,16 @@ class MLPAnalysis:
 
         # --- Evaluate Best Model on a Hold-out Test Set ---
         print("\n🔬 Evaluating the best model on a hold-out test set...")
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+        # Check if stratification is possible, otherwise split without it
+        class_counts = np.bincount(y)
+        if np.min(class_counts) < 2:
+            print("  ⚠️  Disabling stratification for final evaluation due to rare classes (count < 2).")
+            stratify_opt = None
+        else:
+            stratify_opt = y
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=stratify_opt)
 
         # Re-train the model on the full training set for final evaluation
         # This ensures the model is trained on as much data as possible

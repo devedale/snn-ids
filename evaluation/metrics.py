@@ -235,9 +235,10 @@ def _create_visualizations(
     print(f"  🖼️ Matrice confusione dettagliata: {cm_path}")
     
     # 2. Matrice di Confusione Binaria (BENIGN vs ATTACCHI)
+    class_names_list = class_names.tolist()
     benign_idx = 0
-    if 'BENIGN' in class_names:
-        benign_idx = class_names.index('BENIGN')
+    if 'BENIGN' in class_names_list:
+        benign_idx = class_names_list.index('BENIGN')
     
     y_true_binary = (y_true != benign_idx).astype(int)
     y_pred_binary = (y_pred != benign_idx).astype(int)

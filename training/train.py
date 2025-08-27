@@ -209,8 +209,11 @@ def train_model(
 
         # Estrai epoche e batch_size sia da hp che da dizionario
         if isinstance(hp_or_params, dict):
-            epochs = hp_or_params.get('epochs', 10)
-            batch_size = hp_or_params.get('batch_size', 64)
+            def get_value(param_name, default_value):
+                value = hp_or_params.get(param_name, default_value)
+                return value[0] if isinstance(value, list) else value
+            epochs = get_value('epochs', 10)
+            batch_size = get_value('batch_size', 64)
         else: # È un oggetto kt.HyperParameters
             epochs = hp_or_params.get('epochs')
             batch_size = hp_or_params.get('batch_size')
@@ -320,8 +323,11 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: U
 
         # Estrai epoche e batch_size sia da hp che da dizionario
         if isinstance(hp_or_params, dict):
-            epochs = hp_or_params.get('epochs', 10)
-            batch_size = hp_or_params.get('batch_size', 64)
+            def get_value(param_name, default_value):
+                value = hp_or_params.get(param_name, default_value)
+                return value[0] if isinstance(value, list) else value
+            epochs = get_value('epochs', 10)
+            batch_size = get_value('batch_size', 64)
         else: # È un oggetto kt.HyperParameters
             epochs = hp_or_params.get('epochs')
             batch_size = hp_or_params.get('batch_size')
@@ -395,8 +401,11 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Un
     print("  ⚖️  Applying class weights to handle imbalance.")
 
     if isinstance(hp_or_params, dict):
-        epochs = hp_or_params.get('epochs', 10)
-        batch_size = hp_or_params.get('batch_size', 64)
+        def get_value(param_name, default_value):
+            value = hp_or_params.get(param_name, default_value)
+            return value[0] if isinstance(value, list) else value
+        epochs = get_value('epochs', 10)
+        batch_size = get_value('batch_size', 64)
     else: # È un oggetto kt.HyperParameters
         epochs = hp_or_params.get('epochs')
         batch_size = hp_or_params.get('batch_size')

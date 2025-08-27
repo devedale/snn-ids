@@ -33,7 +33,7 @@ from sklearn.model_selection import train_test_split
 sys.path.append(os.path.abspath('.'))
 from config import PREPROCESSING_CONFIG, DATA_CONFIG
 from preprocessing.process import preprocess_pipeline
-from training.train import build_model
+from training.train import build_model, PerClassLossLogger
 from evaluation.metrics import evaluate_model_comprehensive
 import keras_tuner as kt
 

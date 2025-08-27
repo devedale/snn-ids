@@ -146,39 +146,49 @@ class SNNIDSBenchmark:
         print(f"\n{'='*20} TEST COMPLETE: {run_id} (Total Time: {result.get('total_time', 0):.2f}s) {'='*20}")
         return result
 
-    def run_hyperband_mlp(self, max_epochs: int, final_epochs: int, batch_size: int) -> Dict[str, Any]:
-        """Runs Hyperband tuning for the MLP model, then a final run with the best parameters."""
+    def run_hyperband(self, model_type: str, max_epochs: int, final_epochs: int, batch_size: int) -> Dict[str, Any]:
+        """Runs Hyperband tuning for a given model, then a final run with the best parameters."""
         if kt is None or tf is None:
             raise ImportError("KerasTuner and TensorFlow are required for Hyperband tuning. Please install them.")
 
-        print("\n🔬 HYPERBAND TUNING - MLP 4-LAYER")
+        print(f"\n🔬 HYPERBAND TUNING - {model_type.upper()}")
         X, y, label_encoder = self._get_preprocessed_data()
 
-        # MLP requires flattened 2D data
-        if X.ndim == 3:
-            X = X.reshape(X.shape[0], -1)
+        from src.training.utils import prepare_data_for_model
+        X_prepared = prepare_data_for_model(X, model_type)
 
         from sklearn.model_selection import train_test_split
         stratify_opt = y if (np.bincount(y).min() >= 2) else None
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=stratify_opt)
+        X_train, X_val, y_train, y_val = train_test_split(X_prepared, y, test_size=0.2, random_state=42, stratify=stratify_opt)
 
-        input_shape = (X_train.shape[1],)
+        input_shape = X_train.shape[1:]
         num_classes = len(np.unique(y))
 
-        # Model builder function for KerasTuner
+        # --- Dynamic Model Builder for KerasTuner ---
         def model_builder(hp):
-            builder = get_model_builder('mlp_4_layer')
-            # Define the search space for hyperparameters
-            return builder(
-                input_shape=input_shape,
-                num_classes=num_classes,
-                units_layer_1=hp.Int('units_layer_1', min_value=64, max_value=256, step=32),
-                units_layer_2=hp.Int('units_layer_2', min_value=32, max_value=128, step=32),
-                units_layer_3=hp.Int('units_layer_3', min_value=16, max_value=64, step=16),
-                units_layer_4=hp.Int('units_layer_4', min_value=8, max_value=32, step=8),
-                activation=hp.Choice('activation', values=['relu', 'tanh']),
-                learning_rate=hp.Choice('learning_rate', values=[0.005, 0.001, 0.0005])
-            )
+            builder = get_model_builder(model_type)
+
+            # Common search space
+            learning_rate = hp.Choice('learning_rate', values=[0.01, 0.005, 0.001, 0.0005])
+            activation = hp.Choice('activation', values=['relu', 'tanh'])
+
+            # Model-specific search space
+            if model_type in ['gru', 'lstm']:
+                units = hp.Int('units', min_value=32, max_value=128, step=32)
+                return builder(input_shape=input_shape, num_classes=num_classes, units=units, activation=activation, learning_rate=learning_rate)
+
+            elif model_type == 'mlp_4_layer':
+                units_1 = hp.Int('units_layer_1', min_value=64, max_value=256, step=32)
+                units_2 = hp.Int('units_layer_2', min_value=32, max_value=128, step=32)
+                units_3 = hp.Int('units_layer_3', min_value=16, max_value=64, step=16)
+                units_4 = hp.Int('units_layer_4', min_value=8, max_value=32, step=8)
+                return builder(input_shape=input_shape, num_classes=num_classes, units_layer_1=units_1, units_layer_2=units_2, units_layer_3=units_3, units_layer_4=units_4, activation=activation, learning_rate=learning_rate)
+
+            elif model_type == 'dense':
+                 return builder(input_shape=input_shape, num_classes=num_classes, activation=activation, learning_rate=learning_rate)
+
+            else:
+                raise ValueError(f"Hyperband tuning not configured for model type: {model_type}")
 
         tuner = kt.Hyperband(
             model_builder,
@@ -186,7 +196,7 @@ class SNNIDSBenchmark:
             max_epochs=max_epochs,
             factor=3,
             directory='benchmark_results',
-            project_name=f"hyperband_mlp_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            project_name=f"hyperband_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             overwrite=True
         )
 
@@ -206,23 +216,18 @@ class SNNIDSBenchmark:
 
         # Run a final test with the best hyperparameters
         final_test_config = {
-            'model_type': 'mlp_4_layer',
-            'hyperparameters': {
-                'epochs': final_epochs,
-                'batch_size': batch_size,
-                'learning_rate': best_hps.get('learning_rate'),
-                'activation': best_hps.get('activation'),
-                'units_layer_1': best_hps.get('units_layer_1'),
-                'units_layer_2': best_hps.get('units_layer_2'),
-                'units_layer_3': best_hps.get('units_layer_3'),
-                'units_layer_4': best_hps.get('units_layer_4'),
-            }
+            'model_type': model_type,
+            'hyperparameters': best_hps.values
         }
+
         # We need to update the global config for the ModelTrainer to pick up these HPs
-        TRAINING_CONFIG['hyperparameters']['model_specific']['mlp_4_layer'] = final_test_config['hyperparameters']
+        # This will merge the best found HPs with the common ones for the final run.
+        TRAINING_CONFIG['hyperparameters']['model_specific'][model_type] = final_test_config['hyperparameters']
+        TRAINING_CONFIG['hyperparameters']['common']['epochs'] = [final_epochs]
+        TRAINING_CONFIG['hyperparameters']['common']['batch_size'] = [batch_size]
 
         result = self.run_single_configuration(final_test_config)
-        result['test_type'] = 'hyperband_mlp_final'
+        result['test_type'] = f'hyperband_{model_type}_final'
         return result
 
     def _generate_descriptive_folder_name(self, test_config: Dict, timestamp: str) -> str:
@@ -258,14 +263,14 @@ Examples:
   # 2. Run a single test for a specific model and sample size
   python3 benchmark.py --model gru --sample-size 20000
 
-  # 3. Run the Hyperband tuner for MLP, then a final run with the best HPs
-  python3 benchmark.py --hyperband-mlp --hb-max-epochs 20 --hb-final-epochs 30
+  # 3. Run Hyperband tuning on a specific model (e.g., GRU)
+  python3 benchmark.py --model gru --hyperband --hb-max-epochs 20 --hb-final-epochs 30
         '''
     )
     
     # Mode selection
     parser.add_argument('--smoke-test', action='store_true', help='Run a quick, lightweight smoke test.')
-    parser.add_argument('--hyperband-mlp', action='store_true', help='Run Hyperband tuning for the 4-layer MLP.')
+    parser.add_argument('--hyperband', action='store_true', help='Enable Hyperband tuning for the selected model.')
     
     # Basic configuration
     parser.add_argument('--model', type=str, help='Model type to test in a single run (e.g., dense, gru, lstm, mlp_4_layer).')
@@ -301,8 +306,11 @@ Examples:
     try:
         results = None
         # Determine which mode to run
-        if args.hyperband_mlp:
-            results = benchmark.run_hyperband_mlp(
+        if args.hyperband:
+            if not args.model:
+                parser.error("--hyperband mode requires a --model to be specified.")
+            results = benchmark.run_hyperband(
+                model_type=args.model.lower(),
                 max_epochs=args.hb_max_epochs,
                 final_epochs=args.hb_final_epochs,
                 batch_size=args.hb_batch_size

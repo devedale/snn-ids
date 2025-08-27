@@ -123,7 +123,6 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
 
     elif model_type == 'mlp_4_layer':
         model.add(tf.keras.layers.Flatten())
-        dropout_rate = hp.Choice('dropout', values=[0.2, 0.3, 0.4])
 
         # Spazio di ricerca per le unità in ogni layer
         hp_units_1 = hp.Int('units_layer_1', min_value=64, max_value=256, step=32)
@@ -131,15 +130,11 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
         hp_units_3 = hp.Int('units_layer_3', min_value=16, max_value=64, step=16)
         hp_units_4 = hp.Int('units_layer_4', min_value=8, max_value=32, step=8)
 
-        # Costruzione dei 4 layer nascosti
+        # Costruzione dei 4 layer nascosti (SENZA DROPOUT come richiesto)
         model.add(tf.keras.layers.Dense(units=hp_units_1, activation=activation))
-        model.add(tf.keras.layers.Dropout(dropout_rate))
         model.add(tf.keras.layers.Dense(units=hp_units_2, activation=activation))
-        model.add(tf.keras.layers.Dropout(dropout_rate))
         model.add(tf.keras.layers.Dense(units=hp_units_3, activation=activation))
-        model.add(tf.keras.layers.Dropout(dropout_rate))
         model.add(tf.keras.layers.Dense(units=hp_units_4, activation=activation))
-        model.add(tf.keras.layers.Dropout(dropout_rate))
 
     else:
         raise ValueError(f"Tipo di modello non supportato: {model_type}")
@@ -151,7 +146,11 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
     # Compilazione
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     loss = 'sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy'
-    model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
+    model.compile(
+        optimizer=optimizer,
+        loss=loss,
+        metrics=['accuracy', tf.keras.metrics.AUC(name='auc')]
+    )
     
     print(f"✅ Modello {model_type} (tuner-ready) creato e compilato")
     return model

@@ -82,8 +82,7 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
         params = hp_or_params
         hp = kt.HyperParameters()
 
-        # Imposta i valori di default se non presenti nel dizionario
-        # Estrai il primo elemento se il valore è una lista, per compatibilità con la config
+        # Helper: estrae valore singolo (compat con liste standard in config)
         def get_value(param_name, default_value):
             value = params.get(param_name, default_value)
             return value[0] if isinstance(value, list) else value
@@ -96,11 +95,24 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
             hp.Fixed('units', units)
 
         if model_type == 'mlp_4_layer':
-            hidden_units = get_value('hidden_layer_units', [128, 64, 32, 16])
-            hp.Fixed('units_layer_1', hidden_units[0])
-            hp.Fixed('units_layer_2', hidden_units[1])
-            hp.Fixed('units_layer_3', hidden_units[2])
-            hp.Fixed('units_layer_4', hidden_units[3])
+            # Gestione robusta: accetta lista di 4, lista singola o intero
+            units_param = params.get('hidden_layer_units', [256,128,64,32])
+            if isinstance(units_param, (int, float)):
+                units_list = [int(units_param)] * 4
+            elif isinstance(units_param, list):
+                if len(units_param) >= 4:
+                    units_list = [int(units_param[0]), int(units_param[1]), int(units_param[2]), int(units_param[3])]
+                elif len(units_param) == 1:
+                    units_list = [int(units_param[0])] * 4
+                else:
+                    units_list = [128, 64, 32, 16]
+            else:
+                units_list = [128, 64, 32, 16]
+
+            hp.Fixed('units_layer_1', units_list[0])
+            hp.Fixed('units_layer_2', units_list[1])
+            hp.Fixed('units_layer_3', units_list[2])
+            hp.Fixed('units_layer_4', units_list[3])
 
     print(f"🏗️ Costruzione modello {model_type} (tuner-ready)")
     print(f"📊 Input shape: {input_shape}")
@@ -112,6 +124,17 @@ def build_model(model_type: str, input_shape: tuple, num_classes: int, hp_or_par
     
     model = tf.keras.Sequential()
     model.add(tf.keras.layers.Input(shape=input_shape))
+    # Facoltativo: normalizzazione interna con statistiche pre-calcolate
+    if isinstance(hp_or_params, dict):
+        norm_mean = hp_or_params.get('normalization_mean')
+        norm_var = hp_or_params.get('normalization_var')
+        if norm_mean is not None and norm_var is not None:
+            try:
+                norm_layer = tf.keras.layers.Normalization(mean=np.array(norm_mean), variance=np.array(norm_var))
+                model.add(norm_layer)
+                print("🧪 Normalization layer inserito (mean/var precompute)")
+            except Exception:
+                pass
 
     if model_type == 'gru':
         units = hp.Int('units', min_value=32, max_value=128, step=32)
@@ -215,9 +238,42 @@ def train_model(
         print(f"✅ Accuratezza validazione: {accuracy:.4f}")
         
         # Addestra modello finale con tutti i dati
+        # Inserisce normalizzazione interna per MLP 4-layer, altrimenti scaling esterno
+        if model_type == 'mlp_4_layer':
+            # Flatten a 2D se necessario
+            if len(X.shape) == 3:
+                n_samples = X.shape[0]
+                X = X.reshape(n_samples, -1)
+            # Statistiche per normalizzazione interna
+            norm_mean = np.mean(X, axis=0).astype(np.float32)
+            norm_var = np.var(X, axis=0).astype(np.float32) + 1e-8
+        else:
+            is_sequence = len(X.shape) == 3
+            if is_sequence:
+                n_features = X.shape[2]
+                scaler = StandardScaler()
+                X_2d = X.reshape(-1, n_features)
+                scaler.fit(X_2d)
+                X = scaler.transform(X_2d).reshape(X.shape)
+            else:
+                scaler = StandardScaler()
+                scaler.fit(X)
+                X = scaler.transform(X)
+
         num_classes = max(len(np.unique(y)), np.max(y) + 1)
         input_shape = X.shape[1:] if len(X.shape) > 2 else (X.shape[1],)
-        final_model = build_model(model_type, input_shape, num_classes, hp_or_params)
+        # Per MLP passa mean/var al builder così la normalizzazione resta nel modello
+        params_for_build = hp_or_params
+        if model_type == 'mlp_4_layer':
+            if not isinstance(hp_or_params, dict):
+                # Converti HyperParameters in dict minimo
+                params_for_build = {k: hp_or_params.get(k) for k in ['learning_rate', 'activation']}
+            else:
+                params_for_build = dict(hp_or_params)
+            params_for_build['normalization_mean'] = norm_mean.tolist()
+            params_for_build['normalization_var'] = norm_var.tolist()
+
+        final_model = build_model(model_type, input_shape, num_classes, params_for_build)
 
         # Estrai epoche e batch_size sia da hp che da dizionario
         if isinstance(hp_or_params, dict):
@@ -230,7 +286,10 @@ def train_model(
             epochs = hp_or_params.get('epochs')
             batch_size = hp_or_params.get('batch_size')
 
-        final_model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0)
+        # Class weights anche nel fit finale per mitigare il bias verso BENIGN
+        cw = class_weight.compute_class_weight('balanced', classes=np.unique(y), y=y)
+        class_weight_dict = dict(enumerate(cw))
+        final_model.fit(X, y, epochs=epochs, batch_size=batch_size, class_weight=class_weight_dict, verbose=0)
 
         print(f"🏆 Modello finale addestrato su tutti i dati.")
 
@@ -293,6 +352,18 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: U
 
     accuracies = []
     last_fold_losses = None
+    # Prepara aggregatori per media per-epoca su tutti i fold
+    # Determina il numero di epoche una volta sola (stesso per tutti i fold)
+    if isinstance(hp_or_params, dict):
+        def get_value(param_name, default_value):
+            value = hp_or_params.get(param_name, default_value)
+            return value[0] if isinstance(value, list) else value
+        epochs_total = get_value('epochs', 10)
+    else:
+        epochs_total = hp_or_params.get('epochs')
+
+    sums_per_class: Optional[Dict[int, List[float]]] = {} if track_class_loss else None
+    counts_per_class: Optional[Dict[int, List[int]]] = {} if track_class_loss else None
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
         print(f"  Fold {fold + 1}/{TRAINING_CONFIG['k_fold_splits']}")
@@ -314,6 +385,11 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: U
             scaler.fit(X_train)
             X_train = scaler.transform(X_train)
             X_val = scaler.transform(X_val)
+
+        # Se stiamo usando MLP 4-layer, appiattisci finestre temporali a vettori 2D
+        if model_type == 'mlp_4_layer' and len(X_train.shape) == 3:
+            X_train = X_train.reshape(X_train.shape[0], -1)
+            X_val = X_val.reshape(X_val.shape[0], -1)
 
         num_classes = max(len(np.unique(y)), np.max(y) + 1)
         input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)
@@ -353,12 +429,44 @@ def _train_k_fold(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: U
                  verbose=0)
         
         if track_class_loss:
-            last_fold_losses = loss_logger.losses
+            last_fold_losses = loss_logger.losses  # Dict[class_idx -> List[loss_epoch]]
+            # Media per-epoca: somma e conteggio separati
+            if sums_per_class is not None and counts_per_class is not None and last_fold_losses is not None:
+                for class_idx, series in last_fold_losses.items():
+                    # Inizializza vettori per questa classe
+                    if class_idx not in sums_per_class:
+                        sums_per_class[class_idx] = [0.0] * int(epochs_total)
+                        counts_per_class[class_idx] = [0] * int(epochs_total)
+                    # Accumula per epoca, ignorando None/NaN/Inf
+                    for epoch_i in range(min(len(series), int(epochs_total))):
+                        v = series[epoch_i]
+                        if v is None:
+                            continue
+                        try:
+                            if np.isfinite(v):
+                                sums_per_class[class_idx][epoch_i] += float(v)
+                                counts_per_class[class_idx][epoch_i] += 1
+                        except Exception:
+                            continue
 
         _, accuracy = model.evaluate(X_val, y_val, verbose=0)
         accuracies.append(accuracy)
         print(f"    Accuracy: {accuracy:.4f}")
     
+    # Calcola media per-epoca sui fold (se abilitato)
+    if sums_per_class is not None and counts_per_class is not None and len(sums_per_class) > 0:
+        averaged_losses: Dict[int, List[Optional[float]]] = {}
+        for class_idx in sums_per_class.keys():
+            avg_series: List[Optional[float]] = []
+            for epoch_i in range(int(epochs_total)):
+                cnt = counts_per_class[class_idx][epoch_i]
+                if cnt > 0:
+                    avg_series.append(sums_per_class[class_idx][epoch_i] / cnt)
+                else:
+                    avg_series.append(None)
+            averaged_losses[class_idx] = avg_series
+        return np.mean(accuracies), averaged_losses
+
     return np.mean(accuracies), last_fold_losses
 
 def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Union[kt.HyperParameters, Dict], track_class_loss: bool) -> Tuple[float, Optional[Dict]]:
@@ -393,6 +501,11 @@ def _train_split(X: np.ndarray, y: np.ndarray, model_type: str, hp_or_params: Un
         scaler.fit(X_train)
         X_train = scaler.transform(X_train)
         X_test = scaler.transform(X_test)
+
+    # Per MLP 4-layer, appiattisci a 2D dopo lo scaling
+    if model_type == 'mlp_4_layer' and len(X_train.shape) == 3:
+        X_train = X_train.reshape(X_train.shape[0], -1)
+        X_test = X_test.reshape(X_test.shape[0], -1)
 
     num_classes = max(len(np.unique(y)), np.max(y) + 1)
     input_shape = X_train.shape[1:] if len(X_train.shape) > 2 else (X_train.shape[1],)

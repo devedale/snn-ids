@@ -20,7 +20,8 @@ import zipfile
 sys.path.append(os.path.abspath('.'))
 from config import *
 from preprocessing.process import preprocess_pipeline
-from training.train import train_model
+from training.train import train_model, build_model
+import keras_tuner as kt
 from evaluation.metrics import evaluate_model_comprehensive
 
 class SNNIDSBenchmark:
@@ -136,7 +137,7 @@ class SNNIDSBenchmark:
         
         # Modelli da testare - configurabile o default
         if models_to_test is None:
-            models_to_test = self.config_override.get('models_to_test', ['dense', 'gru', 'lstm'])
+            models_to_test = self.config_override.get('models_to_test', ['dense', 'gru', 'lstm', 'mlp_4_layer'])
         
         print(f"🤖 Modelli da testare: {', '.join(models_to_test)}")
         
@@ -193,6 +194,90 @@ class SNNIDSBenchmark:
             print(f"🏆 Miglior modello: {summary['best_model']['config']['model_type']} con accuratezza {summary['best_model']['best_accuracy']:.4f}")
         return final_result
 
+    def run_hyperband_mlp(self, max_epochs: int = 20, final_epochs: int = 30, batch_size: int = 64) -> Dict[str, Any]:
+        """Esegue Hyperband su MLP 4-layer per trovare iperparametri, poi lancia un test finale a epoche fisse."""
+        print("\n🔬 HYPERBAND TUNING - MLP 4-LAYER")
+        # Preprocessing (usa cache se possibile)
+        if self._cached_data is None:
+            X, y, label_encoder = preprocess_pipeline(
+                data_path=self.config_override.get('data_path', DATA_CONFIG['dataset_path']),
+                sample_size=self.config_override.get('sample_size', PREPROCESSING_CONFIG['sample_size'])
+            )
+            self._cached_data = (X, y, label_encoder)
+        else:
+            X, y, label_encoder = self._cached_data
+
+        # Flatten per MLP
+        if len(X.shape) == 3:
+            X = X.reshape(X.shape[0], -1)
+
+        from sklearn.model_selection import train_test_split
+        stratify_opt = y if (np.bincount(y).min() >= 2) else None
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=stratify_opt)
+
+        input_shape = (X_train.shape[1],)
+        num_classes = max(len(np.unique(y)), int(np.max(y)) + 1)
+
+        def model_builder(hp):
+            return build_model('mlp_4_layer', input_shape, num_classes, hp)
+
+        out_dir = 'benchmark_results'
+        project = f"hyperband_mlp4_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        tuner = kt.Hyperband(
+            model_builder,
+            objective='val_accuracy',
+            max_epochs=max_epochs,
+            factor=3,
+            directory=out_dir,
+            project_name=project,
+            overwrite=True
+        )
+
+        # Class weights per mitigare sbilanciamento durante la ricerca
+        from sklearn.utils import class_weight
+        cw = class_weight.compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+        class_weight_dict = dict(enumerate(cw))
+
+        import tensorflow as tf
+        tuner.search(
+            X_train,
+            y_train,
+            validation_data=(X_val, y_val),
+            batch_size=batch_size,
+            callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)],
+            class_weight=class_weight_dict,
+            verbose=1
+        )
+
+        best_hps = tuner.get_best_hyperparameters(1)[0]
+        best_units = [
+            int(best_hps.get('units_layer_1')),
+            int(best_hps.get('units_layer_2')),
+            int(best_hps.get('units_layer_3')),
+            int(best_hps.get('units_layer_4')),
+        ]
+        best_lr = best_hps.get('learning_rate')
+        best_act = best_hps.get('activation')
+
+        print(f"\n🏅 Hyperband selezionato: units={best_units} | lr={best_lr} | act={best_act}")
+
+        # Esegue un singolo test finale con gli iperparametri selezionati (epoche fisse)
+        test_config = {
+            'sample_size': self.config_override.get('sample_size', PREPROCESSING_CONFIG['sample_size']),
+            'data_path': self.config_override.get('data_path', DATA_CONFIG['dataset_path']),
+            'model_type': 'mlp_4_layer',
+            'hyperparameters': {
+                'epochs': [final_epochs],
+                'batch_size': [batch_size],
+                'learning_rate': [best_lr],
+                'activation': [best_act],
+                'hidden_layer_units': best_units,
+            }
+        }
+        result = self._run_single_configuration(test_config)
+        result['test_type'] = 'hyperband_mlp4_final'
+        return result
+
     def _run_evaluation(self, model, X, y, label_encoder, test_config, class_loss_data=None):
         """Esegue valutazione completa con visualizzazioni."""
         from sklearn.model_selection import train_test_split
@@ -213,6 +298,11 @@ class SNNIDSBenchmark:
         if len(X_test) == 0:
             print("    ⚠️ Test set vuoto, uso tutto il dataset per la valutazione.")
             X_test, y_test = X, y
+
+        # Per modelli MLP 4-layer, appiattisci finestre 3D in vettori 2D
+        if test_config.get('model_type') == 'mlp_4_layer' and len(X_train.shape) == 3:
+            X_train = X_train.reshape(X_train.shape[0], -1)
+            X_test = X_test.reshape(X_test.shape[0], -1)
 
         # Passa un array numpy per compatibilità con funzioni che usano .tolist()
         class_names = label_encoder.classes_ if hasattr(label_encoder, 'classes_') else np.array([])
@@ -395,21 +485,33 @@ Esempi di utilizzo:
     parser.add_argument('--output-dir', type=str, default='benchmark_results', help='Directory per salvare i risultati.')
 
     # Argomenti per la configurazione del modello (usati in test singoli o come override)
-    parser.add_argument('--model', choices=['dense', 'gru', 'lstm'], help='Tipo di modello da testare in un singolo run.')
-    parser.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm'], 
-                       help='Lista di modelli da testare nel benchmark completo (es. --models gru lstm)')
+    parser.add_argument('--model', choices=['dense', 'gru', 'lstm', 'mlp_4_layer', '4layerMLP'], help='Tipo di modello da testare in un singolo run.')
+    parser.add_argument('--models', nargs='+', choices=['dense', 'gru', 'lstm', 'mlp_4_layer', '4layerMLP'], 
+                       help='Lista di modelli da testare nel benchmark completo (es. --models gru lstm mlp_4_layer)')
     parser.add_argument('--epochs', type=int, help="Override del numero di epoche per il training (es. 10).")
     parser.add_argument('--batch-size', type=int, help="Override della batch size per il training (es. 64).")
     parser.add_argument('--learning-rate', type=float, help="Override del learning rate (es. 0.001).")
+    parser.add_argument('--hyperband-mlp', action='store_true', help='Esegue Hyperband per MLP 4-layer e poi un run finale con epoche fisse.')
+    parser.add_argument('--hb-max-epochs', type=int, default=20, help='Max epochs per Hyperband (default: 20).')
+    parser.add_argument('--hb-final-epochs', type=int, default=30, help='Epoche del run finale post-tuning (default: 30).')
+    parser.add_argument('--hb-batch-size', type=int, default=64, help='Batch size per Hyperband e finale (default: 64).')
     
     args = parser.parse_args()
     
     # Costruisci dizionario di override dalla linea di comando
+    def _normalize_model_name(name: str) -> str:
+        if not name:
+            return name
+        n = name.strip().lower()
+        if n in ('4layermlp', 'mlp_4_layer', 'mlp4', 'mlp-4-layer', 'mlp4layer'):
+            return 'mlp_4_layer'
+        return n
+
     config_override = {}
     if args.sample_size: config_override['sample_size'] = args.sample_size
     if args.data_path: config_override['data_path'] = args.data_path
-    if args.model: config_override['model_type'] = args.model
-    if args.models: config_override['models_to_test'] = args.models
+    if args.model: config_override['model_type'] = _normalize_model_name(args.model)
+    if args.models: config_override['models_to_test'] = [_normalize_model_name(m) for m in args.models]
     
     # Gestione override iperparametri
     hyperparam_overrides = {}
@@ -426,6 +528,12 @@ Esempi di utilizzo:
         results = None
         if args.smoke_test:
             results = benchmark.run_smoke_test()
+        elif args.hyperband_mlp:
+            results = benchmark.run_hyperband_mlp(
+                max_epochs=args.hb_max_epochs,
+                final_epochs=args.hb_final_epochs,
+                batch_size=args.hb_batch_size,
+            )
         elif args.full:
             results = benchmark.run_full_benchmark()
         else:

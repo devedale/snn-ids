@@ -196,6 +196,22 @@ def _create_visualizations(
     # 0. Grafico Loss vs. Epochs per Classe (se disponibile)
     if class_loss_data:
         try:
+            # Dump diagnostico per verificare contenuto delle loss per classe
+            try:
+                parent_dir = os.path.dirname(output_dir)
+                os.makedirs(parent_dir, exist_ok=True)
+                summary = {
+                    str(k): {
+                        'num_points': int(len([v for v in (class_loss_data.get(k) or []) if v is not None])),
+                        'first_values': [float(v) for v in (class_loss_data.get(k) or [])[:5] if v is not None]
+                    }
+                    for k in class_loss_data.keys()
+                }
+                with open(os.path.join(parent_dir, 'per_class_losses_summary.json'), 'w') as fsum:
+                    json.dump(summary, fsum, indent=2)
+            except Exception:
+                pass
+
             loss_plot_path = plot_class_loss_over_epochs(
                 class_loss_data, class_names, output_dir, model_config
             )

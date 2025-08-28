@@ -1,0 +1,7 @@
+# Homomorphic Encryption (CKKS)
+tenseal==0.3.14
+
+# Tabulazione risultati
+pandas==2.2.2
+
+

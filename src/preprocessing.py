@@ -326,17 +326,49 @@ def preprocess_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, LabelEncoder]:
     return df_processed, label_encoder
 
 def _convert_ip_to_octets(df: pd.DataFrame) -> pd.DataFrame:
-    """Converts IP address strings into four separate octet columns."""
+    """Converts IP address strings into four separate octet columns with optional Crypto-PAn anonymization."""
     print("🌐 Converting IP addresses to octets...")
+    
+    # Initialize Crypto-PAn if enabled
+    cryptopan = None
+    if PREPROCESSING_CONFIG.get("use_cryptopan", False):
+        print("🔐 Crypto-PAn IP anonymization enabled")
+        cryptopan = CryptoPan()
+    
     for ip_col in DATA_CONFIG["ip_columns"]:
         if ip_col in df.columns:
+            if cryptopan:
+                # Anonymize IPs before conversion
+                print(f"  🔐 Anonymizing {ip_col} with Crypto-PAn...")
+                original_ips = df[ip_col].unique()
+                print(f"     Processing {len(original_ips)} unique IP addresses...")
+                
+                # Apply anonymization
+                df[ip_col] = df[ip_col].apply(cryptopan.anonymize_ip)
+                
+                print(f"     ✅ Anonymized {len(original_ips)} unique IPs")
+            
+            # Convert to octets (anonymized or original IPs)
             octets = df[ip_col].str.split('.', expand=True, n=4)
             for i in range(4):
                 octet_col_name = f"{ip_col}_Octet_{i+1}"
                 df[octet_col_name] = pd.to_numeric(octets[i], errors='coerce').fillna(0).astype(int)
+            
             print(f"  ✅ {ip_col} -> 4 octet columns")
+    
+    # Save anonymization mapping if Crypto-PAn was used
+    if cryptopan:
+        output_dir = TRAINING_CONFIG.get("output_path", "output")
+        cryptopan.save_mapping_to_file(output_dir)
+        
+        # Print statistics
+        stats = cryptopan.get_stats()
+        print(f"📊 Crypto-PAn Statistics:")
+        print(f"   Total IPs processed: {stats['total_ips_processed']}")
+        print(f"   Unique IPs cached: {stats['unique_ips_cached']}")
+        print(f"   Key hash: {stats['key_hash']}")
+    
     return df
-
 def _ip_to_octet(ip_str: str, octet_index: int) -> int:
     """Helper to extract a specific octet from an IP string."""
     try:

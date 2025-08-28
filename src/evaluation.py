@@ -241,6 +241,41 @@ def _create_visualizations(
         except Exception as e:
             print(f"  ⚠️ Could not generate ROC curves: {e}")
 
+    # 5. Per-class Cross-Entropy Loss vs Epochs (aggregated across folds if provided)
+    if class_loss_data and isinstance(class_loss_data, dict) and 'per_class' in class_loss_data:
+        try:
+            epochs = class_loss_data.get('epochs', [])
+            per_class = class_loss_data.get('per_class', {})  # keys are class indices as strings
+            num_classes = len(per_class)
+            if num_classes > 0 and len(epochs) > 0:
+                # Grid layout for subplots
+                cols = min(4, num_classes)
+                rows = int(np.ceil(num_classes / cols))
+                plt.figure(figsize=(4*cols, 3*rows))
+                for idx_str, losses in per_class.items():
+                    idx = int(idx_str)
+                    subplot_index = idx + 1
+                    plt.subplot(rows, cols, subplot_index)
+                    y_vals = np.array(losses, dtype=float)
+                    # Trunca/padding to match epochs length
+                    if len(y_vals) > len(epochs):
+                        y_vals = y_vals[:len(epochs)]
+                    elif len(y_vals) < len(epochs):
+                        pad = np.full(len(epochs) - len(y_vals), np.nan)
+                        y_vals = np.concatenate([y_vals, pad])
+                    plt.plot(epochs, y_vals, marker='o', linewidth=1.5)
+                    plt.title(class_names[idx] if idx < len(class_names) else f"Class {idx}", fontsize=10)
+                    plt.xlabel('Epoch')
+                    plt.ylabel('CE Loss')
+                    plt.grid(alpha=0.3)
+                plt.tight_layout()
+                loss_grid_path = os.path.join(output_dir, 'per_class_loss_vs_epochs.png')
+                plt.savefig(loss_grid_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                viz_paths.append(loss_grid_path)
+        except Exception as e:
+            print(f"  ⚠️ Could not generate per-class loss plot: {e}")
+
     return viz_paths
 
 def _format_hyperparameters_for_title(model_config: Dict = None) -> str:

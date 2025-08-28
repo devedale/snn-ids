@@ -5,7 +5,7 @@ This repository implements a principled, reproducible deep‑learning pipeline f
 
 Dataset
 -------
-We use the Canadian Institute for Cybersecurity CSE‑CIC‑IDS2018 dataset (Sharafaldin et al.). Please refer to the official pages for licence and provenance. The code expects CSV files placed under `data/cicids/2018/` following the dataset’s conventional file names.
+We use the Canadian Institute for Cybersecurity CSE‑CIC‑IDS2018 dataset (Sharafaldin et al.). Please refer to the official pages for licence and provenance. The code expects CSV files placed under `data` following the dataset’s conventional file names.
 
 References:
 - I. Sharafaldin, A. H. Lashkari, A. A. Ghorbani. “Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization,” ICISSP 2018.
@@ -39,6 +39,7 @@ Key sections:
 - `PREPROCESSING_CONFIG`: sampling size, balancing strategy (`security` aims at an attack/benign ratio as specified by `benign_ratio`), temporal windowing parameters (`window_size`, `step`).
 - `TRAINING_CONFIG`: validation strategy (`k_fold` by default), K‑fold splits, default model type (GRU) and hyperparameter grids.
 - `BENCHMARK_CONFIG`: output directory, time resolutions to explore, switches for intermediate artefacts and plots.
+ - `RANDOM_CONFIG`: seed globale per Python/NumPy/TensorFlow.
 
 Preprocessing
 -------------
@@ -50,7 +51,7 @@ Preprocessing
 Training Recipe
 ---------------
 - Model: GRU by default (other baselines: LSTM, MLP on flattened windows). The GRU input is 3‑D: `(timesteps, features)`.
-- Validation: `StratifiedKFold(n_splits=k, shuffle=True, random_state=42)`.
+- Validation: `StratifiedKFold(n_splits=k, shuffle=True, random_state=<seed da config>)`.
 - Scaling: `StandardScaler` fitted on the training portion only, per fold; sequence tensors are reshaped to 2‑D for scaling, then reshaped back. This avoids target leakage, which is a common error in IDS literature.
 - Loss function: `sparse_categorical_crossentropy` when `num_classes>2`, otherwise `binary_crossentropy`.
 - Optimizer: Adam; the learning rate grid is configurable.
@@ -68,6 +69,7 @@ The benchmark produces both machine‑readable JSON summaries and publication‑
 Reproducibility
 ---------------
 Seed control is provided at Python, NumPy, and TensorFlow levels. Beware that full determinism depends on the BLAS/GPU stack. All preprocessing choices are surfaced via configuration and are logged to JSON along with run metadata.
+The global seed is defined in `config.py` under `RANDOM_CONFIG['seed']` (default: 79) and applied automatically at startup.
 
 Quick Start
 -----------

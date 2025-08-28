@@ -19,7 +19,7 @@ import multiprocessing
 
 # Add project root to path to allow importing 'config'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG
+from config import DATA_CONFIG, PREPROCESSING_CONFIG, TRAINING_CONFIG, RANDOM_CONFIG
 
 def _process_file_chunk(args: Tuple[str, str, bool]) -> bool:
     """
@@ -203,7 +203,7 @@ def load_and_balance_dataset(
                 if remaining_quota > 0:
                     common_df = df[df['Label'].isin(common_attacks.keys())]
                     if not common_df.empty:
-                        file_samples.append(common_df.sample(n=min(remaining_quota, len(common_df)), random_state=42))
+                        file_samples.append(common_df.sample(n=min(remaining_quota, len(common_df)), random_state=RANDOM_CONFIG.get('seed', 42)))
 
                 if file_samples:
                     sampled_chunks.append(pd.concat(file_samples, ignore_index=True))
@@ -257,7 +257,7 @@ def load_and_balance_dataset(
     print(f"  📊 Selected: {len(benign_df)} BENIGN + {len(attack_df)} ATTACK records")
 
     balanced_df = pd.concat([benign_df, attack_df], ignore_index=True)
-    balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    balanced_df = balanced_df.sample(frac=1, random_state=RANDOM_CONFIG.get('seed', 42)).reset_index(drop=True)
 
     # Ensure all classes have at least `k_fold_splits` samples for StratifiedKFold
     required_per_class = max(2, TRAINING_CONFIG.get("k_fold_splits", 5))
@@ -270,9 +270,9 @@ def load_and_balance_dataset(
             cur = balanced_df[balanced_df['Label'] == lbl]
             need = required_per_class - len(cur)
             if len(cur) > 0:
-                dup = cur.sample(n=need, replace=True, random_state=42)
+                dup = cur.sample(n=need, replace=True, random_state=RANDOM_CONFIG.get('seed', 42))
                 oversampled_chunks.append(dup)
-        balanced_df = pd.concat(oversampled_chunks, ignore_index=True).sample(frac=1.0, random_state=42).reset_index(drop=True)
+        balanced_df = pd.concat(oversampled_chunks, ignore_index=True).sample(frac=1.0, random_state=RANDOM_CONFIG.get('seed', 42)).reset_index(drop=True)
         print(f"  ✅ Oversampling complete. New dataset size: {len(balanced_df)}")
 
     print(f"✅ Balanced dataset loaded: {len(balanced_df)} rows")

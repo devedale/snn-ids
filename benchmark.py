@@ -18,12 +18,12 @@ from typing import Dict, Any, List
 import itertools
 
 # Import the refactored components
-from config import PREPROCESSING_CONFIG, DATA_CONFIG, TRAINING_CONFIG
+from config import PREPROCESSING_CONFIG, DATA_CONFIG, TRAINING_CONFIG, RANDOM_CONFIG
 from src.preprocessing import preprocess_pipeline
 from src.training.trainer import ModelTrainer
 from src.training.models import get_model_builder
 from src.evaluation import evaluate_model_comprehensive
-from src.utils import zip_artifacts
+from src.utils import zip_artifacts, set_global_seed
 
 # KerasTuner is an optional dependency for hyperband
 try:
@@ -43,6 +43,8 @@ class SNNIDSBenchmark:
         # This cache holds the preprocessed data (X, y, label_encoder) to avoid
         # reloading it for each run in a single benchmark execution.
         self._cached_data = None
+        # Ensure deterministic behavior
+        set_global_seed(RANDOM_CONFIG.get('seed', 42))
 
     def _get_preprocessed_data(self) -> tuple:
         """
@@ -159,7 +161,9 @@ class SNNIDSBenchmark:
 
         from sklearn.model_selection import train_test_split
         stratify_opt = y if (np.bincount(y).min() >= 2) else None
-        X_train, X_val, y_train, y_val = train_test_split(X_prepared, y, test_size=0.2, random_state=42, stratify=stratify_opt)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_prepared, y, test_size=0.2, random_state=RANDOM_CONFIG.get('seed', 42), stratify=stratify_opt
+        )
 
         input_shape = X_train.shape[1:]
         num_classes = len(np.unique(y))

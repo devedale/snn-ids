@@ -18,9 +18,30 @@ import inspect
 
 # Add project root to path to allow importing 'config' and other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import TRAINING_CONFIG
+from config import TRAINING_CONFIG, RANDOM_CONFIG
 from .models import get_model_builder
 from .utils import scale_data, prepare_data_for_model, get_model_hyperparameters
+from src.utils import set_global_seed
+
+class PerClassLossCallback(tf.keras.callbacks.Callback):
+    """Keras callback to record per-class cross-entropy loss at each epoch end."""
+    def __init__(self, X_val: np.ndarray, y_val: np.ndarray, num_classes: int):
+        super().__init__()
+        self.X_val = X_val
+        self.y_val = y_val
+        self.num_classes = num_classes
+        self.per_class_losses = {i: [] for i in range(num_classes)}
+
+    def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, Any]] = None):
+        y_pred_proba = self.model.predict(self.X_val, verbose=0)
+        for class_index in range(self.num_classes):
+            mask = (self.y_val == class_index)
+            if np.any(mask):
+                probs = y_pred_proba[mask, class_index]
+                ce = -float(np.mean(np.log(np.clip(probs, 1e-12, 1.0))))
+            else:
+                ce = float('nan')
+            self.per_class_losses[class_index].append(ce)
 
 class ModelTrainer:
     """
@@ -48,6 +69,8 @@ class ModelTrainer:
 
         print(f"🚀 ModelTrainer initialized for model type: {self.model_type}")
         print(f"⚙️ Corrected Hyperparameters: {self.hyperparams}")
+        # Ensure deterministic behavior inside training context as well
+        set_global_seed(RANDOM_CONFIG.get('seed', 42))
 
     def _get_builder_params(self) -> Dict[str, Any]:
         """
@@ -152,14 +175,18 @@ class ModelTrainer:
 
         if np.min(np.bincount(y)) < n_splits:
             print(f"  ⚠️ Disabling stratification for K-Fold due to classes with < {n_splits} samples.")
-            kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+            kf = KFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_CONFIG.get('seed', 42))
         else:
-            kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+            kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_CONFIG.get('seed', 42))
 
         accuracies = []
         builder_params = self._get_builder_params()
         epochs = self.hyperparams['epochs'][0] if isinstance(self.hyperparams.get('epochs'), list) else self.hyperparams.get('epochs', 10)
         batch_size = self.hyperparams['batch_size'][0] if isinstance(self.hyperparams.get('batch_size'), list) else self.hyperparams.get('batch_size', 64)
+
+        # Aggregators for per-class per-epoch loss across folds
+        class_epoch_sums: Dict[int, np.ndarray] = {}
+        class_epoch_counts: Dict[int, np.ndarray] = {}
 
         for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
             print(f"\n--- Fold {fold + 1}/{n_splits} ---")
@@ -176,12 +203,16 @@ class ModelTrainer:
 
             class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
 
+            # Callback to capture per-class loss on validation set
+            per_class_cb = PerClassLossCallback(X_val_prepared, y_val, num_classes)
+
             model.fit(
                 X_train_prepared, y_train,
                 epochs=epochs,
                 batch_size=batch_size,
                 class_weight=dict(enumerate(class_weights)),
                 validation_data=(X_val_prepared, y_val),
+                callbacks=[per_class_cb],
                 verbose=1
             )
 
@@ -189,9 +220,32 @@ class ModelTrainer:
             accuracies.append(accuracy)
             print(f"  Fold {fold + 1} Accuracy: {accuracy:.4f}")
 
+            # Accumulate per-class losses for averaging across folds
+            for class_index, losses in per_class_cb.per_class_losses.items():
+                losses_arr = np.array(losses, dtype=float)
+                if class_index not in class_epoch_sums:
+                    class_epoch_sums[class_index] = np.zeros_like(losses_arr)
+                    class_epoch_counts[class_index] = np.zeros_like(losses_arr)
+                valid = ~np.isnan(losses_arr)
+                class_epoch_sums[class_index][valid] += losses_arr[valid]
+                class_epoch_counts[class_index][valid] += 1
+
         avg_accuracy = np.mean(accuracies)
         print(f"\n✅ K-Fold validation complete. Average Accuracy: {avg_accuracy:.4f}")
-        return avg_accuracy, None
+
+        # Build averaged per-class loss per epoch across folds
+        per_class_avg: Dict[str, list] = {}
+        for class_index, sums in class_epoch_sums.items():
+            counts = np.maximum(class_epoch_counts[class_index], 1)
+            avg_losses = (sums / counts).tolist()
+            per_class_avg[str(class_index)] = avg_losses
+
+        class_loss_data = {
+            'epochs': list(range(1, epochs + 1)),
+            'per_class': per_class_avg
+        }
+
+        return avg_accuracy, class_loss_data
 
     def _train_split(self, X: np.ndarray, y: np.ndarray) -> Tuple[float, Optional[Dict]]:
         """Private method for train-test split validation."""
@@ -199,7 +253,7 @@ class ModelTrainer:
         stratify_opt = y if np.min(np.bincount(y)) >= 2 else None
 
         X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=test_size, random_state=42, stratify=stratify_opt
+            X, y, test_size=test_size, random_state=RANDOM_CONFIG.get('seed', 42), stratify=stratify_opt
         )
 
         X_train_scaled, X_val_scaled = scale_data(X_train, X_val)
@@ -215,18 +269,28 @@ class ModelTrainer:
         batch_size = self.hyperparams['batch_size'][0] if isinstance(self.hyperparams.get('batch_size'), list) else self.hyperparams.get('batch_size', 64)
         class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
 
+        per_class_cb = PerClassLossCallback(X_val_prepared, y_val, num_classes)
+
         model.fit(
             X_train_prepared, y_train,
             epochs=epochs,
             batch_size=batch_size,
             validation_data=(X_val_prepared, y_val),
             class_weight=dict(enumerate(class_weights)),
+            callbacks=[per_class_cb],
             verbose=1
         )
 
         _, accuracy = model.evaluate(X_val_prepared, y_val, verbose=0)
         print(f"✅ Train-test split validation complete. Accuracy: {accuracy:.4f}")
-        return accuracy, None
+
+        per_class = {str(k): v for k, v in per_class_cb.per_class_losses.items()}
+        class_loss_data = {
+            'epochs': list(range(1, epochs + 1)),
+            'per_class': per_class
+        }
+
+        return accuracy, class_loss_data
 
     def save_model(self, model: tf.keras.Model):
         """Saves the trained model to the path specified in the config."""

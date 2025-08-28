@@ -203,6 +203,9 @@ test_results/
 benchmark_cache/
 *.benchmark
 
+# cartella di cache
+preprocessed_cache/
+
 # File di statistiche
 stats_output/
 *.stats

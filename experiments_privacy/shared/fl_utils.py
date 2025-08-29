@@ -86,22 +86,47 @@ def make_client_data_splits(X: np.ndarray, y: np.ndarray, num_clients: int, iid:
 
 
 def train_local(model: tf.keras.Model, X: np.ndarray, y: np.ndarray, epochs: int, batch_size: int, use_dp: bool, dp_noise_multiplier: float, dp_l2_clip: float, dp_delta: float) -> Dict[str, Any]:
+    """Esegue l'allenamento locale e, se use_dp=True, applica DP sul delta dei pesi.
+
+    Strategia DP semplificata:
+    - calcola i pesi prima del fit (w0) e dopo il fit (w1)
+    - ottiene l'aggiornamento delta = w1 - w0
+    - applica clipping L2 al vettore delta concatenato con soglia dp_l2_clip
+    - aggiunge rumore gaussiano i.i.d. per coordinata con std = dp_noise_multiplier * dp_l2_clip
+    - restituisce w0 + (delta_clipped + noise)
+    """
+    # Pesi iniziali
+    w0 = model.get_weights()
     # Allenamento standard
     history = model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0)
-    weights = model.get_weights()
-    if use_dp:
-        # Sostituisce DP-SGD con un meccanismo semplice: clipping L2 e aggiunta di rumore gaussiano ai pesi
-        clipped = []
-        for w in weights:
-            norm = np.linalg.norm(w)
-            factor = 1.0
-            if norm > dp_l2_clip and norm > 0:
-                factor = dp_l2_clip / norm
-            w_c = w * factor
-            noise = np.random.normal(loc=0.0, scale=dp_noise_multiplier * max(1e-6, dp_l2_clip), size=w.shape)
-            clipped.append(w_c + noise.astype(w.dtype))
-        weights = clipped
-    return {"weights": weights, "history": {k: [float(v) for v in val] for k, val in history.history.items()}}
+    w1 = model.get_weights()
+
+    if not use_dp:
+        return {"weights": w1, "history": {k: [float(v) for v in val] for k, val in history.history.items()}}
+
+    # Flatten helper
+    vec0, shapes = _flatten_weights([w.astype(np.float64) for w in w0])
+    vec1, _ = _flatten_weights([w.astype(np.float64) for w in w1])
+    delta = vec1 - vec0
+    norm = float(np.linalg.norm(delta))
+    if norm > 0.0:
+        factor = min(1.0, float(dp_l2_clip) / (norm + 1e-12))
+    else:
+        factor = 1.0
+    delta_clipped = delta * factor
+    dim = int(delta_clipped.shape[0]) if hasattr(delta_clipped, 'shape') else len(delta_clipped)
+    # Scala per-coordinata: std ≈ (sigma * clip) / sqrt(d)
+    per_coord_std = (float(dp_noise_multiplier) * float(max(1e-6, dp_l2_clip))) / max(1.0, np.sqrt(float(dim)))
+    noise = np.random.normal(loc=0.0, scale=per_coord_std, size=delta_clipped.shape)
+    delta_noisy = delta_clipped + noise
+    vec_out = vec0 + delta_noisy
+    w_out = _unflatten_vector(vec_out, shapes)
+    # Cast back to original dtypes layer-wise
+    final_weights = []
+    for w_ref, w_new in zip(w0, w_out):
+        final_weights.append(w_new.astype(w_ref.dtype, copy=False))
+
+    return {"weights": final_weights, "history": {k: [float(v) for v in val] for k, val in history.history.items()}}
 
 
 def aggregate_fedavg(client_weights: List[List[np.ndarray]]) -> List[np.ndarray]:
